@@ -63,7 +63,18 @@ def main(args: argparse.Namespace) -> tuple[list[float] | np.ndarray, list[int] 
     # the value function in-place for states 0, 1, ...). During the policy
     # improvement, use the `argmax_with_tolerance` to choose the best action.
 
+    for _ in range(args.steps):
+        for _ in range(args.iterations):
+            for i in range(GridWorld.states):
+                value_function[i] = sum(prob * (reward + args.gamma * value_function[new_state])
+                                           for prob, reward, new_state in GridWorld.step(i, policy[i]))
+
+        for i in range(GridWorld.states):
+            policy[i] = argmax_with_tolerance([sum(prob * (reward + args.gamma * value_function[new_state]) for prob, reward, new_state in GridWorld.step(i, action)) for action in range(GridWorld.actions)])
+
+
     # TODO: The final value function should be in `value_function` and final greedy policy in `policy`.
+
     return value_function, policy
 
 
