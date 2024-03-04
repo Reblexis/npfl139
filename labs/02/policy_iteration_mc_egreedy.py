@@ -5,11 +5,11 @@ import numpy as np
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--gamma", default=1.0, type=float, help="Discount factor.")
+parser.add_argument("--gamma", default=0.95, type=float, help="Discount factor.")
 parser.add_argument("--epsilon", default=0.02, type=float, help="Monte Carlo epsilon")
 parser.add_argument("--mc_length", default=100, type=int, help="Monte Carlo simulation episode length")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
-parser.add_argument("--seed", default=None, type=int, help="Random seed.")
+parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--steps", default=10, type=int, help="Number of policy evaluation/improvements to perform.")
 # If you add more arguments, ReCodEx will keep them with your default values.
 
@@ -95,9 +95,31 @@ def main(args: argparse.Namespace) -> tuple[list[float] | np.ndarray, list[int] 
     # in all states), perform the policy improvement, using the
     # `argmax_with_tolerance` to choose the best action.
 
-    # TODO: Compute `value_function` by taking the value from
-    # `action_value_function` according to the computed policy.
-    value_function = None
+    counts = np.zeros((env.states, env.actions))
+
+    for _ in range(args.steps):
+        for start_state in range(env.states):
+            rewards = []
+            state = start_state
+            start_action = env.epsilon_greedy(args.epsilon, policy[state])
+            action = start_action
+            for i in range(args.mc_length):
+                reward, state = env.step(state, action)
+                rewards.append(reward)
+                if(i!=args.mc_length-1):
+                    action = env.epsilon_greedy(args.epsilon, policy[state])
+
+            returns = 0
+            for reward in reversed(rewards):
+                returns = args.gamma * returns + reward
+
+            counts[start_state, start_action] += 1
+            action_value_function[start_state, start_action] += (returns - action_value_function[start_state, start_action]) / counts[start_state, start_action]
+
+        policy = argmax_with_tolerance(action_value_function, axis=1)
+
+
+    value_function = action_value_function[np.arange(env.states), policy]
 
     return value_function, policy
 

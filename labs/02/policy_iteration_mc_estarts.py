@@ -65,24 +65,6 @@ def main(args: argparse.Namespace) -> tuple[list[float] | np.ndarray, list[int] 
     action_value_function = np.zeros((env.states, env.actions))
     policy = np.zeros(env.states, np.int32)
 
-    # TODO: Implement a variant of policy iteration algorithm, with
-    # `args.steps` steps of policy evaluation/policy improvement. During policy
-    # evaluation, estimate action-value function by Monte Carlo simulation:
-    # - for start_state in range(env.states):
-    #   - for start_action in range(env.actions):
-    #     - start in the given `(start_state, start_action)` pair
-    #     - perform `args.mc_length` Monte Carlo steps, utilizing the action
-    #       from the policy (apart from the first step, where the action is
-    #       pre-defined)
-    #     - compute the return of the whole simulation
-    #     - update the action-value function at the `(start_state, start_action)`
-    #       pair, considering the simulation return as its estimate, by averaging
-    #       all estimates from this and previous steps of policy evaluation.
-    #
-    # After completing the policy_evaluation step (i.e., after updating estimates
-    # of all state-action pairs), perform the policy improvement, using the
-    # `argmax_with_tolerance` to choose the best action.
-
     counts = np.zeros((env.states, env.actions))
 
     for _ in range(args.steps):
