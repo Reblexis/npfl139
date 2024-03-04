@@ -5,7 +5,7 @@ import numpy as np
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--gamma", default=1.0, type=float, help="Discount factor.")
+parser.add_argument("--gamma", default=0.99999, type=float, help="Discount factor.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--steps", default=10, type=int, help="Number of policy evaluation/improvements to perform.")
 # If you add more arguments, ReCodEx will keep them with your default values.
@@ -55,13 +55,21 @@ def main(args: argparse.Namespace) -> tuple[list[float] | np.ndarray, list[int] 
     value_function = [0.0] * GridWorld.states
     policy = [0] * GridWorld.states
 
-    # TODO: Implement policy iteration algorithm, with `args.steps` steps of
-    # policy evaluation/policy improvement. During policy evaluation, compute
-    # the value function exactly by solving the system of linear equations.
-    # During the policy improvement, use the `argmax_with_tolerance` to
-    # choose the best action.
+    for _ in range(args.steps):
+        A_matrix = np.zeros((GridWorld.states, GridWorld.states))
+        b_vector = np.zeros(GridWorld.states)
+        for state in range(GridWorld.states):
+            A_matrix[state, state] = 1
+            action = policy[state]
+            for prob, reward, new_state in GridWorld.step(state, action):
+                A_matrix[state, new_state] -= prob * args.gamma
+                b_vector[state] += prob * reward
 
-    # TODO: The final value function should be in `value_function` and final greedy policy in `policy`.
+        value_function = np.linalg.solve(A_matrix, b_vector)
+
+        for i in range(GridWorld.states):
+            policy[i] = argmax_with_tolerance([sum(prob * (reward + args.gamma * value_function[new_state]) for prob, reward, new_state in GridWorld.step(i, action)) for action in range(GridWorld.actions)])
+
     return value_function, policy
 
 

@@ -56,13 +56,6 @@ def main(args: argparse.Namespace) -> tuple[list[float] | np.ndarray, list[int] 
     value_function = [0.0] * GridWorld.states
     policy = [0] * GridWorld.states
 
-    # TODO: Implement policy iteration algorithm, with `args.steps` steps of
-    # policy evaluation/policy improvement. During policy evaluation, use the
-    # current value function and perform `args.iterations` applications of the
-    # Bellman equation. Perform the policy evaluation asynchronously (i.e., update
-    # the value function in-place for states 0, 1, ...). During the policy
-    # improvement, use the `argmax_with_tolerance` to choose the best action.
-
     for _ in range(args.steps):
         for _ in range(args.iterations):
             for i in range(GridWorld.states):
@@ -72,8 +65,6 @@ def main(args: argparse.Namespace) -> tuple[list[float] | np.ndarray, list[int] 
         for i in range(GridWorld.states):
             policy[i] = argmax_with_tolerance([sum(prob * (reward + args.gamma * value_function[new_state]) for prob, reward, new_state in GridWorld.step(i, action)) for action in range(GridWorld.actions)])
 
-
-    # TODO: The final value function should be in `value_function` and final greedy policy in `policy`.
 
     return value_function, policy
 
