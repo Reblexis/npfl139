@@ -6,7 +6,7 @@ import numpy as np
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--episodes", default=200, type=int, help="Training episodes.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 # If you add more arguments, ReCodEx will keep them with your default values.
@@ -26,6 +26,7 @@ def main(args: argparse.Namespace) -> np.ndarray:
     V = np.zeros(env.observation_space.n)
     C = np.zeros(env.observation_space.n)
 
+
     for _ in range(args.episodes):
         state, done = env.reset()[0], False
 
@@ -39,6 +40,17 @@ def main(args: argparse.Namespace) -> np.ndarray:
             state = next_state
 
         # TODO: Update V using weighted importance sampling.
+        G = 0
+        W = 1
+        for state, action, reward in reversed(episode):
+            G = G + reward
+            if action in [1, 2]:
+                W = W * 2
+            else:
+                break
+
+            C[state] = C[state] + W
+            V[state] = V[state] + (W / C[state]) * (G - V[state])
 
     return V
 
