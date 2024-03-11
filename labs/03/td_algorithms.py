@@ -17,6 +17,8 @@ parser.add_argument("--n", default=1, type=int, help="Use n-step method.")
 parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy; use greedy as target")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=47, type=int, help="Random seed.")
+
+
 # If you add more arguments, ReCodEx will keep them with your default values.
 
 
@@ -55,12 +57,23 @@ def main(args: argparse.Namespace) -> np.ndarray:
 
         # Generate episode and update Q using the given TD method
         next_action, next_action_prob = choose_next_action(Q)
-        while not done:
+
+        t = 0
+        T = 9999999999999999 # finished time step
+        tau = -1
+        states, actions, rewards = [], [], []
+        while tau < T:
             action, action_prob, state = next_action, next_action_prob, next_state
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             if not done:
                 next_action, next_action_prob = choose_next_action(Q)
+            else:
+                T = t + 1
+
+            states.append(state)
+            actions.append(action)
+            rewards.append(reward)
 
             # TODO: Perform the update to the state-action value function `Q`, using
             # a TD update with the following parameters:
@@ -88,6 +101,25 @@ def main(args: argparse.Namespace) -> np.ndarray:
             # the updates in the order in which you encountered the state-action
             # pairs and during these updates, use the `compute_target_policy(Q)`
             # with the up-to-date value of `Q`.
+
+            tau = t - args.n + 1
+
+            if tau >= 0:
+                if t+1 >= T:
+                    G = reward
+                else:
+                    G = reward + args.gamma * np.sum(Q[next_state] * compute_target_policy(Q))
+
+                for k in range(min(t, T-1), tau, -1):
+                    if args.mode == "tree_backup":
+                        G = rewards[k] + args.gamma * compute_target_policy(Q)[actions[k]] * G
+                        for action in range(env.action_space.n):
+                            if action!=actions[k]:
+                                G += args.gamma * compute_target_policy(Q)[action]
+                    else:
+                        G = rewards[k] + args.gamma * np.sum(Q[states[k+1]] * compute_target_policy(Q))
+
+            t += 1
 
     return Q
 
