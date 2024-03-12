@@ -12,9 +12,9 @@ parser.add_argument("--alpha", default=0.1, type=float, help="Learning rate alph
 parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration epsilon factor.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor gamma.")
-parser.add_argument("--mode", default="sarsa", type=str, help="Mode (sarsa/expected_sarsa/tree_backup).")
-parser.add_argument("--n", default=1, type=int, help="Use n-step method.")
-parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy; use greedy as target")
+parser.add_argument("--mode", default="tree_backup", type=str, help="Mode (sarsa/expected_sarsa/tree_backup).")
+parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
+parser.add_argument("--off_policy", default=True, action="store_true", help="Off-policy; use greedy as target")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=47, type=int, help="Random seed.")
 
@@ -61,19 +61,21 @@ def main(args: argparse.Namespace) -> np.ndarray:
         t = 0
         T = 9999999999999999 # finished time step
         tau = -1
-        states, actions, rewards = [], [], []
-        while tau < T:
-            action, action_prob, state = next_action, next_action_prob, next_state
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
-            if not done:
-                next_action, next_action_prob = choose_next_action(Q)
-            else:
-                T = t + 1
+        states, actions, action_probs, rewards = [], [], [], []
+        while tau < T-1:
+            if t < T:
+                action, action_prob, state = next_action, next_action_prob, next_state
+                next_state, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                if not done:
+                    next_action, next_action_prob = choose_next_action(Q)
+                else:
+                    T = t + 1
 
-            states.append(state)
-            actions.append(action)
-            rewards.append(reward)
+                states.append(state)
+                actions.append(action)
+                action_probs.append(action_prob)
+                rewards.append(reward)
 
             # TODO: Perform the update to the state-action value function `Q`, using
             # a TD update with the following parameters:
@@ -105,21 +107,36 @@ def main(args: argparse.Namespace) -> np.ndarray:
             tau = t - args.n + 1
 
             if tau >= 0:
+                target_policy = compute_target_policy(Q)
+                w = 1
                 if t+1 >= T:
                     G = reward
                 else:
-                    G = reward + args.gamma * np.sum(Q[next_state] * compute_target_policy(Q)[next_state])
-
-                for k in range(min(t, T-1), tau, -1):
-                    if args.mode == "tree_backup":
-                        G = rewards[k] + args.gamma * compute_target_policy(Q)[states[k]][actions[k]] * G
-                        for action in range(env.action_space.n):
-                            if action != actions[k]:
-                                G += args.gamma * compute_target_policy(Q)[states[k]][action] * Q[states[k]][action]
+                    if args.mode == "sarsa":
+                        G = reward + args.gamma * Q[next_state][next_action]
+                        w = target_policy[next_state][next_action] / next_action_prob
+                    elif args.mode == "expected_sarsa" or args.mode == "tree_backup":
+                        G = reward + args.gamma * np.sum(Q[next_state] * target_policy[next_state])
                     else:
-                        pass
+                        raise ValueError(f"Unknown mode {args.mode}")
 
-                Q[states[tau]][actions[tau]] += args.alpha * (G - Q[states[tau]][actions[tau]])
+                for k in range(min(t-1, T-2), tau-1, -1):
+                    if args.mode == "tree_backup":
+                        G = rewards[k] + args.gamma * target_policy[states[k+1]][actions[k+1]] * G
+                        for action in range(env.action_space.n):
+                            if action != actions[k+1]:
+                                G += args.gamma * target_policy[states[k+1]][action] * Q[states[k+1]][action]
+                    elif args.mode=="sarsa":
+                        G = rewards[k] + args.gamma * G
+                    elif args.mode == "expected_sarsa":
+                        G = rewards[k] + args.gamma * G
+                    else:
+                        raise ValueError(f"Unknown mode {args.mode}")
+
+                    if args.mode != "tree_backup" and args.off_policy:
+                        w *= target_policy[states[k+1]][actions[k+1]] / action_probs[k+1]
+
+                Q[states[tau]][actions[tau]] += args.alpha * (G - Q[states[tau]][actions[tau]]) * w
 
             t += 1
 
