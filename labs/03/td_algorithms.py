@@ -37,25 +37,20 @@ def main(args: argparse.Namespace) -> np.ndarray:
 
     Q = np.zeros((env.observation_space.n, env.action_space.n))
 
-    # The next action is always chosen in the epsilon-greedy way.
     def choose_next_action(Q: np.ndarray) -> tuple[int, float]:
         greedy_action = argmax_with_tolerance(Q[next_state])
         next_action = greedy_action if generator.uniform() >= args.epsilon else env.action_space.sample()
         return next_action, args.epsilon / env.action_space.n + (1 - args.epsilon) * (greedy_action == next_action)
 
-    # The target policy is either the behavior policy (if not `args.off_policy`),
-    # or the greedy policy (if `args.off_policy`).
     def compute_target_policy(Q: np.ndarray) -> np.ndarray:
         target_policy = np.eye(env.action_space.n)[argmax_with_tolerance(Q, axis=-1)]
         if not args.off_policy:
             target_policy = (1 - args.epsilon) * target_policy + args.epsilon / env.action_space.n
         return target_policy
 
-    # Run the TD algorithm
     for _ in range(args.episodes):
         next_state, done = env.reset()[0], False
 
-        # Generate episode and update Q using the given TD method
         next_action, next_action_prob = choose_next_action(Q)
 
         t = 0
@@ -76,33 +71,6 @@ def main(args: argparse.Namespace) -> np.ndarray:
                 actions.append(action)
                 action_probs.append(action_prob)
                 rewards.append(reward)
-
-            # TODO: Perform the update to the state-action value function `Q`, using
-            # a TD update with the following parameters:
-            # - `args.n`: use `args.n`-step method
-            # - `args.off_policy`:
-            #    - if False, the epsilon-greedy behaviour policy is also the target policy
-            #    - if True, the target policy is the greedy policy
-            #      - for SARSA (with any `args.n`) and expected SARSA (with `args.n` > 1),
-            #        importance sampling must be used
-            # - `args.mode`: this argument can have the following values:
-            #   - "sarsa": regular SARSA algorithm
-            #   - "expected_sarsa": expected SARSA algorithm
-            #   - "tree_backup": tree backup algorithm
-            #
-            # Perform the updates as soon as you can -- whenever you have all the information
-            # to update `Q[state, action]`, do it. For each `action` use its corresponding
-            # `action_prob` at the time of taking the `action` as the behaviour policy probability,
-            # and the `compute_target_policy(Q)` with the current `Q` as the target policy.
-            #
-            # Do not forget that when `done` is True, bootstrapping on the
-            # `next_state` is not used.
-            #
-            # Also note that when the episode ends and `args.n` > 1, there will
-            # be several state-action pairs that also need to be updated. Perform
-            # the updates in the order in which you encountered the state-action
-            # pairs and during these updates, use the `compute_target_policy(Q)`
-            # with the up-to-date value of `Q`.
 
             tau = t - args.n + 1
 
