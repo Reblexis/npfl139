@@ -108,16 +108,18 @@ def main(args: argparse.Namespace) -> np.ndarray:
                 if t+1 >= T:
                     G = reward
                 else:
-                    G = reward + args.gamma * np.sum(Q[next_state] * compute_target_policy(Q))
+                    G = reward + args.gamma * np.sum(Q[next_state] * compute_target_policy(Q)[next_state])
 
                 for k in range(min(t, T-1), tau, -1):
                     if args.mode == "tree_backup":
-                        G = rewards[k] + args.gamma * compute_target_policy(Q)[actions[k]] * G
+                        G = rewards[k] + args.gamma * compute_target_policy(Q)[states[k]][actions[k]] * G
                         for action in range(env.action_space.n):
-                            if action!=actions[k]:
-                                G += args.gamma * compute_target_policy(Q)[action]
+                            if action != actions[k]:
+                                G += args.gamma * compute_target_policy(Q)[states[k]][action] * Q[states[k]][action]
                     else:
-                        G = rewards[k] + args.gamma * np.sum(Q[states[k+1]] * compute_target_policy(Q))
+                        pass
+
+                Q[states[tau]][actions[tau]] += args.alpha * (G - Q[states[tau]][actions[tau]])
 
             t += 1
 
