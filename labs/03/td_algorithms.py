@@ -90,10 +90,8 @@ def main(args: argparse.Namespace) -> np.ndarray:
 
                 for k in range(min(t-1, T-2), tau-1, -1):
                     if args.mode == "tree_backup":
-                        G = rewards[k] + args.gamma * target_policy[states[k+1]][actions[k+1]] * G
-                        for action in range(env.action_space.n):
-                            if action != actions[k+1]:
-                                G += args.gamma * target_policy[states[k+1]][action] * Q[states[k+1]][action]
+                        G = rewards[k] + args.gamma * (target_policy[states[k+1]][actions[k+1]] * G)
+                        G += args.gamma * (np.sum(target_policy[states[k+1]] * Q[states[k+1]]) - target_policy[states[k+1]][actions[k+1]] * Q[states[k+1]][actions[k+1]])
                     elif args.mode=="sarsa":
                         G = rewards[k] + args.gamma * G
                     elif args.mode == "expected_sarsa":
