@@ -111,10 +111,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         fast_eval = evaluate(Q, 10)
 
         if len(models) < 5 or float(models[-5].stem) < fast_eval:
-            slow_eval = evaluate(Q, 20)
+            slow_eval = evaluate(Q, 50)
             with open(Path(args.models_path) / f"{slow_eval:.5f}.pkl", "wb") as f:
                 pickle.dump(Q, f)
-            with open(Path(args.models_path) / "hyperparameters.json", "w") as f:
+            with open(Path(args.models_path) / f"{slow_eval:.5f}.json", "w") as f:
                 json.dump(vars(args), f)
             print(f"Saved model with evaluation return {slow_eval:.5f}")
 
