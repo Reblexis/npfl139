@@ -15,7 +15,7 @@ parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--alpha", default=1, type=float, help="Learning rate.")
 parser.add_argument("--epsilon", default=0.2, type=float, help="Exploration factor.")
 parser.add_argument("--epsilon_final", default=0.01, type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=5000, type=int, help="Training episodes.")
+parser.add_argument("--epsilon_final_at", default=2000, type=int, help="Training episodes.")
 parser.add_argument("--alpha_final", default=0.01, type=float, help="Final learning rate.")
 parser.add_argument("--gamma", default=1, type=float, help="Discounting factor.")
 parser.add_argument("--tiles", default=8, type=int, help="Number of tiles.")
@@ -31,11 +31,12 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     alpha = args.alpha
 
     training = True
+
+    returns = []
     while training:
         # Perform episode
-        if env.episode >= args.epsilon_final_at*2:
-            training = False
         state, done = env.reset()[0], False
+        G = 0
         while not done:
             # TODO: Choose an action.
             action = np.argmax(np.sum(W[state], axis=0)) if np.random.rand() > epsilon else env.action_space.sample()
@@ -46,10 +47,15 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             # TODO: Update the action-value estimates
 
             next_action = np.argmax(np.sum(W[next_state], axis=0))
-            W[state, action] += alpha * (reward + args.gamma * np.sum(W[next_state, next_action])
+            W[state, action] += alpha/args.tiles * (reward + args.gamma * np.sum(W[next_state, next_action])
                                          - np.sum(W[state, action]))
 
             state = next_state
+            G += reward
+
+        returns.append(G)
+        if len(returns)>100 and sum(returns[-100:]) / 100 > -105:
+            training = False
 
         if args.epsilon_final_at:
             epsilon = np.interp(env.episode + 1, [0, args.epsilon_final_at], [args.epsilon, args.epsilon_final])
