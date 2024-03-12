@@ -54,7 +54,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             G += reward
 
         returns.append(G)
-        if len(returns)>100 and sum(returns[-100:]) / 100 > -105:
+        if len(returns)>100 and sum(returns[-100:]) / 100 > -103:
             training = False
 
         if args.epsilon_final_at:
