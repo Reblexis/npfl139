@@ -8,25 +8,25 @@ import os
 from pathlib import Path
 import pickle
 import json
-
+import random
 import wrappers
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--recodex", default=True, action="store_true", help="Running in ReCodEx")
+parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=57, type=int, help="Random seed.")
-parser.add_argument("--alpha", default=0.2, type=float, help="Learning rate alpha.")
-parser.add_argument("--alpha_final", default=0.01, type=float, help="Final learning rate.")
-parser.add_argument("--alpha_final_at", default=2000, type=int, help="Training episodes.")
-parser.add_argument("--episodes", default=4000, type=int, help="Training episodes.")
-parser.add_argument("--epsilon", default=0.2, type=float, help="Exploration epsilon factor.")
+parser.add_argument("--alpha", default=0.05, type=float, help="Learning rate alpha.")
+parser.add_argument("--alpha_final", default=0.001, type=float, help="Final learning rate.")
+parser.add_argument("--alpha_final_at", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--episodes", default=1000000, type=int, help="Training episodes.")
+parser.add_argument("--epsilon", default=0.05, type=float, help="Exploration epsilon factor.")
 parser.add_argument("--epsilon_final", default=0.01, type=float, help="Final exploration epsilon factor.")
-parser.add_argument("--epsilon_final_at", default=2000, type=int, help="Training episodes.")
+parser.add_argument("--epsilon_final_at", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--gamma", default=1, type=float, help="Discount factor gamma.")
 parser.add_argument("--mode", default="tree_backup", type=str, help="Mode (sarsa/expected_sarsa/tree_backup).")
 parser.add_argument("--n", default=8, type=int, help="Use n-step method.")
-parser.add_argument("--off_policy", default=True, action="store_true", help="Off-policy; use greedy as target")
+parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy; use greedy as target")
 
 parser.add_argument("--models_path", default="data/models/lunar_lander", type=str, help="Path to save best models to")
 parser.add_argument("--best_model_path", default="best_model.pkl", type=str, help="Path to the best model")
@@ -64,7 +64,7 @@ def load_kth_best_model(k: int) -> np.ndarray:
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set random seed
-    np.random.seed(args.seed)
+    #np.random.seed(args.seed)
 
     # Assuming you have pre-trained your agent locally, perform only evaluation in ReCodEx
     if args.recodex:
@@ -80,7 +80,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 done = terminated or truncated
 
     Q = np.zeros((env.observation_space.n, env.action_space.n))
-    #generator = np.random.RandomState(args.seed)
+    generator = np.random.RandomState()
 
     def choose_next_action(Q: np.ndarray) -> tuple[int, float]:
         greedy_action = argmax_with_tolerance(Q[next_state])
@@ -128,6 +128,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     for _ in range(args.episodes):
         if env.episode % 200 == 0 and env.episode > 0:
             consider_best(Q)
+            k = random.randint(1, 3)
+            Q = load_kth_best_model(k)
             print(f"Episode {env.episode}/{args.episodes}, epsilon {epsilon:.3f}, alpha {alpha:.3f}, elapsed {time.time() - start_time:.1f}s")
 
         next_state, done = env.reset()[0], False
