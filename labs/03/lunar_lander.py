@@ -25,8 +25,8 @@ parser.add_argument("--epsilon_final", default=0.01, type=float, help="Final exp
 parser.add_argument("--epsilon_final_at", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--gamma", default=1, type=float, help="Discount factor gamma.")
 parser.add_argument("--mode", default="tree_backup", type=str, help="Mode (sarsa/expected_sarsa/tree_backup).")
-parser.add_argument("--n", default=8, type=int, help="Use n-step method.")
-parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy; use greedy as target")
+parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
+parser.add_argument("--off_policy", default=True, action="store_true", help="Off-policy; use greedy as target")
 
 parser.add_argument("--models_path", default="data/models/lunar_lander", type=str, help="Path to save best models to")
 parser.add_argument("--best_model_path", default="best_model.pkl", type=str, help="Path to the best model")
@@ -79,7 +79,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
 
-    Q = np.zeros((env.observation_space.n, env.action_space.n))
     generator = np.random.RandomState()
 
     def choose_next_action(Q: np.ndarray) -> tuple[int, float]:
@@ -106,35 +105,39 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             returns.append(G)
         return sum(returns) / num_episodes
 
+    def save_model(Q: np.ndarray, eval_return: float):
+        with open(Path(args.models_path) / f"{eval_return:.5f}.pkl", "wb") as f:
+            pickle.dump(Q, f)
+        with open(Path(args.models_path) / f"{eval_return:.5f}.json", "w") as f:
+            json.dump(vars(args), f)
+        print(f"Saved model with evaluation return {eval_return:.5f}")
+
     def consider_best(Q: np.ndarray):
         models = get_sorted_models()
         fast_eval = evaluate(Q, 10)
 
         if len(models) < 5 or float(models[-5].stem) < fast_eval:
             slow_eval = evaluate(Q, 50)
-            with open(Path(args.models_path) / f"{slow_eval:.5f}.pkl", "wb") as f:
-                pickle.dump(Q, f)
-            with open(Path(args.models_path) / f"{slow_eval:.5f}.json", "w") as f:
-                json.dump(vars(args), f)
-            print(f"Saved model with evaluation return {slow_eval:.5f}")
+            save_model(Q, slow_eval)
 
     start_time = time.time()
 
     alpha = args.alpha
     epsilon = args.epsilon
 
-    Q = load_kth_best_model(1)
+    Q1 = load_kth_best_model(1)
+    Q2 = load_kth_best_model(1)
 
     for _ in range(args.episodes):
         if env.episode % 200 == 0 and env.episode > 0:
-            consider_best(Q)
-            k = random.randint(1, 3)
-            Q = load_kth_best_model(k)
+            consider_best(Q1+Q2)
+            Q1 = load_kth_best_model(random.randint(1, 3))
+            Q2 = load_kth_best_model(random.randint(1, 3))
             print(f"Episode {env.episode}/{args.episodes}, epsilon {epsilon:.3f}, alpha {alpha:.3f}, elapsed {time.time() - start_time:.1f}s")
 
         next_state, done = env.reset()[0], False
 
-        next_action, next_action_prob = choose_next_action(Q)
+        next_action, next_action_prob = choose_next_action(Q1)
 
         t = 0
         T = 9999999999999999 # finished time step
@@ -146,7 +149,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 if not done:
-                    next_action, next_action_prob = choose_next_action(Q)
+                    next_action, next_action_prob = choose_next_action(Q1+Q2)
                 else:
                     T = t + 1
 
@@ -156,38 +159,27 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 rewards.append(reward)
 
             tau = t - args.n + 1
+            selected_id = np.random.randint(2)
+            QE = Q1 if selected_id == 0 else Q2
+            QT = Q2 if selected_id == 0 else Q1
 
             if tau >= 0:
-                target_policy = compute_target_policy(Q)
-                w = 1
+                target_policy = compute_target_policy(QT)
                 if t+1 >= T:
                     G = reward
                 else:
-                    if args.mode == "sarsa":
-                        G = reward + args.gamma * Q[next_state][next_action]
-                        w = target_policy[next_state][next_action] / next_action_prob
-                    elif args.mode == "expected_sarsa" or args.mode == "tree_backup":
-                        G = reward + args.gamma * np.sum(Q[next_state] * target_policy[next_state])
-                    else:
-                        raise ValueError(f"Unknown mode {args.mode}")
+                    G = reward + args.gamma * np.sum(QE[next_state] * target_policy[next_state])
 
                 for k in range(min(t-1, T-2), tau-1, -1):
-                    if args.mode == "tree_backup":
-                        G = rewards[k] + args.gamma * target_policy[states[k+1]][actions[k+1]] * G
-                        for action in range(env.action_space.n):
-                            if action != actions[k+1]:
-                                G += args.gamma * target_policy[states[k+1]][action] * Q[states[k+1]][action]
-                    elif args.mode=="sarsa":
-                        G = rewards[k] + args.gamma * G
-                    elif args.mode == "expected_sarsa":
-                        G = rewards[k] + args.gamma * G
-                    else:
-                        raise ValueError(f"Unknown mode {args.mode}")
+                    G = rewards[k] + args.gamma * target_policy[states[k+1]][actions[k+1]] * G
+                    for action in range(env.action_space.n):
+                        if action != actions[k+1]:
+                            G += args.gamma * target_policy[states[k+1]][action] * QE[states[k+1]][action]
 
-                    if args.mode != "tree_backup" and args.off_policy:
-                        w *= target_policy[states[k+1]][actions[k+1]] / action_probs[k+1]
-
-                Q[states[tau]][actions[tau]] += alpha * (G - Q[states[tau]][actions[tau]]) * w
+                if selected_id == 0:
+                    Q2[states[tau]][actions[tau]] += alpha * (G - Q2[states[tau]][actions[tau]])
+                else:
+                    Q1[states[tau]][actions[tau]] += alpha * (G - Q1[states[tau]][actions[tau]])
 
             t += 1
 
