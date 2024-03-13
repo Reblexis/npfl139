@@ -5,3 +5,4 @@ python3 lunar_lander.py --mode=tree_backup --n=4
 python3 lunar_lander.py --mode=tree_backup --n=8 --off_policy --gamma=0.99
 python3 lunar_lander.py --mode=tree_backup --n=8 --off_policy --alpha=0.1 --alpha_final=0.1 --epsilon=0.1 --epsilon_final=0.001
 python3 lunar_lander.py --mode=tree_backup --n=8 --off_policy --alpha=0.1 --alpha_final=0.01 --epsilon=0.5 --epsilon_final=0.001 --gamma=0.99
+python3 lunar_lander.py --mode=tree_backup --n=4 --off_policy --alpha=0.1 --alpha_final=0.01 --epsilon=0.1 --epsilon_final=0.001

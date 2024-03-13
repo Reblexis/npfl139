@@ -114,10 +114,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     def consider_best(Q: np.ndarray):
         models = get_sorted_models()
-        fast_eval = evaluate(Q, 10)
+        fast_eval = evaluate(Q, 100)
 
         if len(models) < 5 or float(models[-5].stem) < fast_eval:
-            slow_eval = evaluate(Q, 50)
+            slow_eval = evaluate(Q, 400)
             save_model(Q, slow_eval)
 
     start_time = time.time()
