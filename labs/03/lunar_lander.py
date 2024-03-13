@@ -129,7 +129,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     Q2 = load_kth_best_model(1)
 
     for _ in range(args.episodes):
-        if env.episode % 200 == 0 and env.episode > 0:
+        if env.episode % 500 == 0 and env.episode > 0:
             consider_best(Q1+Q2)
             Q1 = load_kth_best_model(random.randint(1, 3))
             Q2 = load_kth_best_model(random.randint(1, 3))
