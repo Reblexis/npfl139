@@ -107,7 +107,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             with open(model, "rb") as f:
                 Q = pickle.load(f)
             score = evaluate(Q, 100)
-            if score<70:
+            if score<90:
                 remove_model(float(model.stem))
                 continue
             print(f"Model {model.stem} scored {score:.2f}")

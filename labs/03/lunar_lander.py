@@ -26,7 +26,7 @@ parser.add_argument("--epsilon_final_at", default=1000, type=int, help="Training
 parser.add_argument("--gamma", default=1, type=float, help="Discount factor gamma.")
 parser.add_argument("--mode", default="tree_backup", type=str, help="Mode (sarsa/expected_sarsa/tree_backup).")
 parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
-parser.add_argument("--off_policy", default=True, action="store_true", help="Off-policy; use greedy as target")
+parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy; use greedy as target")
 
 parser.add_argument("--models_path", default="data/models/lunar_lander", type=str, help="Path to save best models to")
 parser.add_argument("--best_model_path", default="best_model.pkl", type=str, help="Path to the best model")
@@ -131,8 +131,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     for _ in range(args.episodes):
         if env.episode % 500 == 0 and env.episode > 0:
             consider_best(Q1+Q2)
-            Q1 = load_kth_best_model(random.randint(1, 3))
-            Q2 = load_kth_best_model(random.randint(1, 3))
             print(f"Episode {env.episode}/{args.episodes}, epsilon {epsilon:.3f}, alpha {alpha:.3f}, elapsed {time.time() - start_time:.1f}s")
 
         next_state, done = env.reset()[0], False
