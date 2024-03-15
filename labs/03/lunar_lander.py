@@ -26,13 +26,18 @@ parser.add_argument("--epsilon_final", default=0.01, type=float, help="Final exp
 parser.add_argument("--epsilon_final_at", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--gamma", default=1, type=float, help="Discount factor gamma.")
 parser.add_argument("--mode", default="tree_backup", type=str, help="Mode (sarsa/expected_sarsa/tree_backup).")
-parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
-parser.add_argument("--off_policy", default=True, action="store_true", help="Off-policy; use greedy as target")
+parser.add_argument("--n", default=1, type=int, help="Use n-step method.")
+parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy; use greedy as target")
 parser.add_argument("--max_steps", default=500, type=int, help="Maximum number of steps in an episode otherwise punished")
 
 parser.add_argument("--models_path", default="data/models/lunar_lander", type=str, help="Path to save best models to")
 parser.add_argument("--best_model_path", default="best_model.pkl", type=str, help="Path to the best model")
 
+
+def epsilon_greedy(epsilon: float, values: np.ndarray):
+    if random.uniform(0, 1) < epsilon:
+        return random.randint(0, len(values)-1)
+    return values.argmax(-1)
 
 def argmax_with_tolerance(x: np.ndarray, axis: int = -1) -> np.ndarray:
     """Argmax with small tolerance, choosing the value with smallest index on ties"""
@@ -82,11 +87,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 done = terminated or truncated
 
     generator = np.random.RandomState()
-
-    def choose_next_action(Q: np.ndarray) -> tuple[int, float]:
-        greedy_action = argmax_with_tolerance(Q[next_state])
-        next_action = greedy_action if generator.uniform() >= epsilon else env.action_space.sample()
-        return next_action, epsilon / env.action_space.n + (1 - epsilon) * (greedy_action == next_action)
 
     def compute_target_policy(Q: np.ndarray) -> np.ndarray:
         target_policy = np.eye(env.action_space.n)[argmax_with_tolerance(Q, axis=-1)]
@@ -139,19 +139,19 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
         next_state, done = env.reset()[0], False
 
-        next_action, next_action_prob = choose_next_action(Q1)
+        next_action = epsilon_greedy(epsilon, Q1[next_state, :] + Q2[next_state, :])
 
         t = 0
         T = 9999999999999999 # finished time step
         tau = -1
-        states, actions, action_probs, rewards = [deque(maxlen=args.n) for _ in range(4)]
+        states, actions, rewards = [deque(maxlen=args.n) for _ in range(3)]
         while t-args.n < T-1:
             if t < T:
-                action, action_prob, state = next_action, next_action_prob, next_state
+                action, state = next_action, next_state
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 if not done:
-                    next_action, next_action_prob = choose_next_action((Q1+Q2)/2)
+                    action = epsilon_greedy(epsilon, Q1[state, :] + Q2[state, :])
                 else:
                     T = t + 1
 
@@ -160,30 +160,27 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
                 states.appendleft(state)
                 actions.appendleft(action)
-                action_probs.appendleft(action_prob)
                 rewards.appendleft(reward)
             else:
                 states.pop()
                 actions.pop()
-                action_probs.pop()
                 rewards.pop()
 
             selected_id = np.random.randint(2)
-            QE = Q1 if selected_id == 0 else Q2
-            QT = Q2 if selected_id == 0 else Q1
 
             if t>=args.n-1:
-                target_policy = compute_target_policy(QT)
+                #target_policy = compute_target_policy(Q2 if selected_id == 0 else Q1)
                 if t+1 >= T:
                     G = reward
                 else:
-                    G = reward + args.gamma * np.sum(QE[next_state] * target_policy[next_state])
+                    best_action = argmax_with_tolerance(Q2[next_state] if selected_id == 0 else Q1[next_state])
+                    G = reward + args.gamma * (Q1[next_state][best_action] if selected_id == 0 else Q2[next_state][best_action])
 
                 for k in range(len(states)-1):
                     G = rewards[k+1] + args.gamma * target_policy[states[k]][actions[k]] * G
                     for action in range(env.action_space.n):
                         if action != actions[k]:
-                            G += args.gamma * target_policy[states[k]][action] * QE[states[k]][action]
+                            G += args.gamma * target_policy[states[k]][action] * (Q1[states[k]][action] if selected_id == 0 else Q2[states[k]][action])
 
                 if selected_id == 0:
                     Q2[states[-1]][actions[-1]] += alpha * (G - Q2[states[-1]][actions[-1]])
