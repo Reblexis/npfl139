@@ -10,23 +10,25 @@ import pickle
 import json
 import random
 import wrappers
+from collections import deque
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=57, type=int, help="Random seed.")
-parser.add_argument("--alpha", default=0.05, type=float, help="Learning rate alpha.")
+parser.add_argument("--alpha", default=0.1, type=float, help="Learning rate alpha.")
 parser.add_argument("--alpha_final", default=0.001, type=float, help="Final learning rate.")
-parser.add_argument("--alpha_final_at", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--alpha_final_at", default=10000, type=int, help="Training episodes.")
 parser.add_argument("--episodes", default=1000000, type=int, help="Training episodes.")
-parser.add_argument("--epsilon", default=0.05, type=float, help="Exploration epsilon factor.")
+parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration epsilon factor.")
 parser.add_argument("--epsilon_final", default=0.01, type=float, help="Final exploration epsilon factor.")
 parser.add_argument("--epsilon_final_at", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--gamma", default=1, type=float, help="Discount factor gamma.")
 parser.add_argument("--mode", default="tree_backup", type=str, help="Mode (sarsa/expected_sarsa/tree_backup).")
 parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
-parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy; use greedy as target")
+parser.add_argument("--off_policy", default=True, action="store_true", help="Off-policy; use greedy as target")
+parser.add_argument("--max_steps", default=500, type=int, help="Maximum number of steps in an episode otherwise punished")
 
 parser.add_argument("--models_path", default="data/models/lunar_lander", type=str, help="Path to save best models to")
 parser.add_argument("--best_model_path", default="best_model.pkl", type=str, help="Path to the best model")
@@ -125,12 +127,14 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     alpha = args.alpha
     epsilon = args.epsilon
 
-    Q1 = load_kth_best_model(1)
-    Q2 = load_kth_best_model(1)
+    Q1 = np.zeros((env.observation_space.n, env.action_space.n))
+    Q2 = np.zeros((env.observation_space.n, env.action_space.n))
+    #Q1 = load_kth_best_model(1)
+    #Q2 = load_kth_best_model(1)
 
     for _ in range(args.episodes):
         if env.episode % 500 == 0 and env.episode > 0:
-            consider_best(Q1+Q2)
+            consider_best((Q1+Q2)/2)
             print(f"Episode {env.episode}/{args.episodes}, epsilon {epsilon:.3f}, alpha {alpha:.3f}, elapsed {time.time() - start_time:.1f}s")
 
         next_state, done = env.reset()[0], False
@@ -140,44 +144,51 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         t = 0
         T = 9999999999999999 # finished time step
         tau = -1
-        states, actions, action_probs, rewards = [], [], [], []
-        while tau < T-1:
+        states, actions, action_probs, rewards = [deque(maxlen=args.n) for _ in range(4)]
+        while t-args.n < T-1:
             if t < T:
                 action, action_prob, state = next_action, next_action_prob, next_state
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 if not done:
-                    next_action, next_action_prob = choose_next_action(Q1+Q2)
+                    next_action, next_action_prob = choose_next_action((Q1+Q2)/2)
                 else:
                     T = t + 1
 
-                states.append(state)
-                actions.append(action)
-                action_probs.append(action_prob)
-                rewards.append(reward)
+                if t>args.max_steps:
+                    reward -= 10
 
-            tau = t - args.n + 1
+                states.appendleft(state)
+                actions.appendleft(action)
+                action_probs.appendleft(action_prob)
+                rewards.appendleft(reward)
+            else:
+                states.pop()
+                actions.pop()
+                action_probs.pop()
+                rewards.pop()
+
             selected_id = np.random.randint(2)
             QE = Q1 if selected_id == 0 else Q2
             QT = Q2 if selected_id == 0 else Q1
 
-            if tau >= 0:
+            if t>=args.n-1:
                 target_policy = compute_target_policy(QT)
                 if t+1 >= T:
                     G = reward
                 else:
                     G = reward + args.gamma * np.sum(QE[next_state] * target_policy[next_state])
 
-                for k in range(min(t-1, T-2), tau-1, -1):
-                    G = rewards[k] + args.gamma * target_policy[states[k+1]][actions[k+1]] * G
+                for k in range(len(states)-1):
+                    G = rewards[k+1] + args.gamma * target_policy[states[k]][actions[k]] * G
                     for action in range(env.action_space.n):
-                        if action != actions[k+1]:
-                            G += args.gamma * target_policy[states[k+1]][action] * QE[states[k+1]][action]
+                        if action != actions[k]:
+                            G += args.gamma * target_policy[states[k]][action] * QE[states[k]][action]
 
                 if selected_id == 0:
-                    Q2[states[tau]][actions[tau]] += alpha * (G - Q2[states[tau]][actions[tau]])
+                    Q2[states[-1]][actions[-1]] += alpha * (G - Q2[states[-1]][actions[-1]])
                 else:
-                    Q1[states[tau]][actions[tau]] += alpha * (G - Q1[states[tau]][actions[tau]])
+                    Q1[states[-1]][actions[-1]] += alpha * (G - Q1[states[-1]][actions[-1]])
 
             t += 1
 
