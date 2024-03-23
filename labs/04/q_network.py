@@ -16,14 +16,16 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
-parser.add_argument("--epsilon", default=..., type=float, help="Exploration factor.")
-parser.add_argument("--epsilon_final", default=..., type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=..., type=int, help="Training episodes.")
-parser.add_argument("--gamma", default=..., type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=..., type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=..., type=float, help="Learning rate.")
-parser.add_argument("--target_update_freq", default=..., type=int, help="Target update frequency.")
+parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
+parser.add_argument("--epsilon", default=0.9, type=float, help="Exploration factor.")
+parser.add_argument("--epsilon_final", default=0.1, type=float, help="Final exploration factor.")
+parser.add_argument("--epsilon_final_at", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
+parser.add_argument("--hidden_layer_size", default=64, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate.")
+parser.add_argument("--target_update_freq", default=10, type=int, help="Target update frequency.")
+
+parser.add_argument("--replay_buffer_min_length", default=100, type=int, help="Minimal replay buffer length.")
 
 
 class Network:
@@ -32,16 +34,17 @@ class Network:
 
     def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # TODO: Create a suitable model and store it as `self._model`.
-        self._model = ...
         self._model = torch.nn.Sequential(
-            ...
+            torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(args.hidden_layer_size, env.action_space.n)
         ).to(self.device)
 
         # TODO: Define an optimizer (most likely from `torch.optim`).
-        self._optimizer = ...
+        self._optimizer = torch.optim.SGD(self._model.parameters(), lr=args.learning_rate)
 
         # TODO: Define the loss (most likely some `torch.nn.*Loss`).
-        self._loss = ...
+        self._loss = torch.nn.MSELoss()
 
         # PyTorch uses uniform initializer $U[-1/sqrt n, 1/sqrt n]$ for both weights and biases.
         # Keras uses Glorot (also known as Xavier) uniform for weights and zeros for biases.
@@ -89,6 +92,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     # Construct the network
     network = Network(env, args)
+    target_network = Network(env, args)
 
     # Replay memory; the `max_length` parameter can be passed to limit its size.
     replay_buffer = wrappers.ReplayBuffer()
@@ -100,10 +104,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # Perform episode
         state, done = env.reset()[0], False
         while not done:
-            # TODO: Choose an action.
-            # You can compute the q_values of a given state by
-            #   q_values = network.predict(state[np.newaxis])[0]
-            action = ...
+            q_values = network.predict(state[np.newaxis])[0]
+            action = np.random.randint(env.action_space.n) if np.random.rand() < epsilon else np.argmax(q_values)
 
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
@@ -124,6 +126,18 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             # After you compute suitable targets, you can train the network by
             #   network.train(...)
 
+            if len(replay_buffer) >= args.replay_buffer_min_length:
+                transitions = replay_buffer.sample(args.batch_size)
+                states, actions, rewards, dones, next_states = zip(*transitions)
+
+                q_values = network.predict(states)
+                next_q_values = network.predict(next_states)
+
+                for i, (_state, _action, _reward, _done, _next_state) in enumerate(transitions):
+                    q_values[i][_action] = _reward + args.gamma * np.max(next_q_values[i]) * (not _done)
+
+                network.train(states, q_values)
+
             state = next_state
 
         if args.epsilon_final_at:
@@ -134,7 +148,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         state, done = env.reset(start_evaluation=True)[0], False
         while not done:
             # TODO: Choose (greedy) action
-            action = ...
+            action = np.argmax(network.predict(state[np.newaxis])[0])
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
