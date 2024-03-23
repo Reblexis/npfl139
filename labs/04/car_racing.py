@@ -21,6 +21,77 @@ parser.add_argument("--continuous", default=1, type=int, help="Use continuous ac
 parser.add_argument("--frame_skip", default=1, type=int, help="Frame skip.")
 
 
+class Network:
+    # Use GPU if available.
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
+        self._model = torch.nn.Sequential(
+            torch.nn.Linear(env.observation_space.shape[0], env.action_space.n),
+        ).to(self.device)
+
+        self._optimizer = torch.optim.SGD(self._model.parameters(), lr=args.learning_rate)
+
+        self._loss = torch.nn.MSELoss()
+
+        self._model.apply(wrappers.torch_init_with_xavier_and_zeros)
+
+    @wrappers.typed_torch_function(device, torch.float32, torch.float32)
+    def train(self, states: torch.Tensor, q_values: torch.Tensor) -> None:
+        self._model.train()
+        predictions = self._model(states)
+        loss = self._loss(predictions, q_values)
+        self._optimizer.zero_grad()
+        loss.backward()
+        with torch.no_grad():
+            self._optimizer.step()
+
+    @wrappers.typed_torch_function(device, torch.float32)
+    def predict(self, states: torch.Tensor) -> np.ndarray:
+        self._model.eval()
+        with torch.no_grad():
+            return self._model(states)
+
+    # If you want to use target network, the following method copies weights from
+    # a given Network to the current one.
+    def copy_weights_from(self, other: Self) -> None:
+        self._model.load_state_dict(other._model.state_dict())
+
+class Preprocessor:
+    def __init__(self, args: argparse.Namespace) -> None:
+        pass
+
+    def preprocess(self, state: np.ndarray) -> np.ndarray:
+        return state
+
+class Episode:
+    def __init__(self):
+        self.states = []
+        self.actions = []
+        self.rewards = []
+        self.next_states = []
+        self.dones = []
+
+class DQN:
+    def __init__(self, network: Network, args: argparse.Namespace) -> None:
+        self._network = network
+
+
+    def process_episode(self):
+        pass
+
+
+
+class Agent:
+    def __init__(self, env: wrappers.EvaluationEnv, preprocessor: Preprocessor, policy args: argparse.Namespace) -> None:
+        self._network = Network(env, args)
+
+    def preprocess_state(self, state: np.ndarray) -> np.ndarray:
+        return state
+
+    def simulate(self):
+
+
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set random seeds and the number of threads
     np.random.seed(args.seed)

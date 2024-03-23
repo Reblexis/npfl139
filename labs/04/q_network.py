@@ -32,19 +32,15 @@ parser.add_argument("--evaluation_episodes", default=100, type=int, help="Evalua
 
 
 class Network:
-    # Use GPU if available.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
-        # TODO: Create a suitable model and store it as `self._model`.
         self._model = torch.nn.Sequential(
             torch.nn.Linear(env.observation_space.shape[0], env.action_space.n),
         ).to(self.device)
 
-        # TODO: Define an optimizer (most likely from `torch.optim`).
         self._optimizer = torch.optim.SGD(self._model.parameters(), lr=args.learning_rate)
 
-        # TODO: Define the loss (most likely some `torch.nn.*Loss`).
         self._loss = torch.nn.MSELoss()
 
         # PyTorch uses uniform initializer $U[-1/sqrt n, 1/sqrt n]$ for both weights and biases.
@@ -131,7 +127,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             # Append state, action, reward, done and next_state to replay_buffer
             replay_buffer.append(Transition(state, action, reward, done, next_state))
 
-            # TODO: If the `replay_buffer` is large enough, perform training using
+            # If the `replay_buffer` is large enough, perform training using
             # a batch of `args.batch_size` uniformly randomly chosen transitions.
             #
             # The `replay_buffer` offers a method with signature
