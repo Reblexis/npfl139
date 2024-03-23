@@ -18,14 +18,17 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
 parser.add_argument("--epsilon", default=0.9, type=float, help="Exploration factor.")
-parser.add_argument("--epsilon_final", default=0.1, type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--epsilon_final", default=0.01, type=float, help="Final exploration factor.")
+parser.add_argument("--epsilon_final_at", default=500000, type=int, help="Training episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=64, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate.")
-parser.add_argument("--target_update_freq", default=10, type=int, help="Target update frequency.")
+parser.add_argument("--learning_rate", default=0.005, type=float, help="Learning rate.")
+parser.add_argument("--target_update_freq", default=10000, type=int, help="Target update frequency.")
 
-parser.add_argument("--replay_buffer_min_length", default=100, type=int, help="Minimal replay buffer length.")
+parser.add_argument("--replay_buffer_max_length", default=1000000, type=int, help="Maximum replay buffer length.")
+parser.add_argument("--replay_buffer_min_length", default=50000, type=int, help="Minimal replay buffer length.")
+parser.add_argument("--evaluate_each", default=100, type=int, help="Evaluate each number of episodes.")
+parser.add_argument("--evaluation_episodes", default=100, type=int, help="Evaluate each number of episodes.")
 
 
 class Network:
@@ -35,9 +38,7 @@ class Network:
     def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # TODO: Create a suitable model and store it as `self._model`.
         self._model = torch.nn.Sequential(
-            torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size),
-            torch.nn.ReLU(),
-            torch.nn.Linear(args.hidden_layer_size, env.action_space.n)
+            torch.nn.Linear(env.observation_space.shape[0], env.action_space.n),
         ).to(self.device)
 
         # TODO: Define an optimizer (most likely from `torch.optim`).
@@ -82,6 +83,22 @@ class Network:
         self._model.load_state_dict(other._model.state_dict())
 
 
+def evaluate(env: wrappers.EvaluationEnv, network: Network, args: argparse.Namespace) -> float:
+    returns = []
+    for _ in range(args.evaluation_episodes):
+        state, done = env.reset(start_evaluation=False)[0], False
+        g = 0
+        while not done:
+            q_values = network.predict(state[np.newaxis])[0]
+            action = np.argmax(q_values)
+            state, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+
+            g += reward
+
+        returns.append(g)
+    return np.sum(returns) / args.evaluation_episodes
+
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set random seeds and the number of threads
     np.random.seed(args.seed)
@@ -95,11 +112,12 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     target_network = Network(env, args)
 
     # Replay memory; the `max_length` parameter can be passed to limit its size.
-    replay_buffer = wrappers.ReplayBuffer()
+    replay_buffer = wrappers.ReplayBuffer(max_length=args.replay_buffer_max_length)
     Transition = collections.namedtuple("Transition", ["state", "action", "reward", "done", "next_state"])
 
     epsilon = args.epsilon
     training = True
+    steps = 0
     while training:
         # Perform episode
         state, done = env.reset()[0], False
@@ -131,19 +149,36 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 states, actions, rewards, dones, next_states = zip(*transitions)
 
                 q_values = network.predict(states)
-                next_q_values = network.predict(next_states)
+                network_next_q_values = network.predict(next_states)
+                target_next_q_values = target_network.predict(next_states)
 
                 for i, (_state, _action, _reward, _done, _next_state) in enumerate(transitions):
-                    q_values[i][_action] = _reward + args.gamma * np.max(next_q_values[i]) * (not _done)
+                    q_values[i][_action] = (_reward + args.gamma * (1 - _done) *
+                                            target_next_q_values[i][np.argmax(network_next_q_values[i])])
 
                 network.train(states, q_values)
 
-            state = next_state
+            if steps % args.target_update_freq == 0:
+                print(f"Currect step: {steps}, updating target network.")
+                target_network.copy_weights_from(network)
 
-        if args.epsilon_final_at:
-            epsilon = np.interp(env.episode + 1, [0, args.epsilon_final_at], [args.epsilon, args.epsilon_final])
+            state = next_state
+            steps += 1
+
+            if args.epsilon_final_at:
+                epsilon = np.interp(steps, [0, args.epsilon_final_at], [args.epsilon, args.epsilon_final])
+
+        if steps>args.epsilon_final_at and steps % args.evaluate_each == 0:
+            evaluation_score = evaluate(env, network, args)
+            print(f"Current step: {steps}, evaluation score: {evaluation_score}")
+            if evaluation_score > 460:
+                training = False
 
     # Final evaluation
+    # Save network
+    #network._model.load_state_dict(torch.load("model.pth", map_location=network.device))
+    torch.save(network._model.state_dict(), "model.pth")
+
     while True:
         state, done = env.reset(start_evaluation=True)[0], False
         while not done:
