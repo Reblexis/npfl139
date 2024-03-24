@@ -1,0 +1,32 @@
+program: car_racing.py
+name: car-racing
+method: grid
+metric:
+  goal: maximize
+  name: eval_reward
+parameters:
+  image_size:
+    values: [84]
+  batch_size:
+    values: [32]
+  learning_rate:
+    values: [0.001]
+  replay_buffer_max_length:
+    values: [100000]
+  replay_buffer_min_length:
+    values: [1000]
+  target_update_frequency:
+    values: [1000]
+  gamma:
+    values: [0.99]
+  epsilon:
+    values: [0.5]
+  epsilon_final:
+    values: [0.01]
+  epsilon_final_at:
+    values: [100000]
+  episode_chunks_size:
+    values: [10]
+
+
+
