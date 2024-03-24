@@ -29,6 +29,7 @@ parser.add_argument("--continuous", default=0, type=int, help="Use continuous ac
 parser.add_argument("--frame_skip", default=1, type=int, help="Frame skip.")
 
 # Meta
+parser.add_argument("--n_steps", default=1000000, type=int, help="Number of training steps.")
 parser.add_argument("--evaluate_for", default=15, type=int, help="Evaluate for number of episodes.")
 parser.add_argument("--evaluate_each", default=5, type=int, help="Evaluate each number of network updates.")
 
@@ -159,6 +160,8 @@ class Episode:
 class DQN:
 
     def __init__(self, network: Network, _args: argparse.Namespace) -> None:
+        self.n_steps = _args.n_steps
+
         self.policy_network = network
         self.target_network = Network(_args)
         self.target_network.copy_weights_from(self.policy_network)
@@ -195,6 +198,8 @@ class DQN:
             for state, action, reward, next_state, done in episode:
                 self.replay_buffer.append(Transition(state, action, reward, done, next_state))
                 self.current_step += 1
+                if self.current_step >= self.n_steps:
+                    return
                 wandb.log({"step": self.current_step})
 
             self.current_episode += 1
@@ -238,7 +243,8 @@ class DQN:
 
     def learn(self, episodes: list[Episode]) -> None:
         self.collect_episodes(episodes)
-        self.update()
+        if self.current_step < self.n_steps:
+            self.update()
 
 
 class Agent:
@@ -247,7 +253,9 @@ class Agent:
         self.env = _env
         self.preprocessor = preprocessor
         self.strategy = strategy
-        self.args = _args
+
+        self.evaluate_each = _args.evaluate_each
+        self.evaluate_for = _args.evaluate_for
 
         self.episode_chunks_size = _args.episode_chunks_size
 
@@ -274,17 +282,21 @@ class Agent:
         return episodes
 
     def evaluate(self) -> float:
-        episodes = self.simulate(self.args.evaluate_for, greedy=True)
+        episodes = self.simulate(self.evaluate_for, greedy=True)
         rewards = [sum(episode.rewards) for episode in episodes]
         return sum(rewards) / len(rewards)
 
-    def train(self, steps: int) -> None:
-        for i in range(steps):
+    def train(self) -> None:
+        i = 0
+        while self.strategy.current_step < self.strategy.n_steps:
             episodes = self.simulate(self.episode_chunks_size)
             self.strategy.learn(episodes)
+            if self.strategy.current_step > self.strategy.n_steps:
+                break
 
-            if i % self.args.evaluate_each == 0:
+            if i % self.evaluate_each == 0:
                 wandb.log({"eval_reward": self.evaluate()})
+            i += 1
 
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
@@ -313,7 +325,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     strategy = DQN(network, args)
     agent = Agent(env, preprocessor, strategy, args)
 
-    agent.train(1000)
+    agent.train()
 
 
 if __name__ == "__main__":
