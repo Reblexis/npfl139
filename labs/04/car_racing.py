@@ -233,8 +233,9 @@ class DQN:
             target_next_q_values = self.target_network.predict(next_states)
 
             for i, (_state, _action, _reward, _done, _next_state) in enumerate(transitions):
-                q_values[i][_action] = (_reward + self.gamma * (1 - _done) *
-                                        target_next_q_values[i][np.argmax(network_next_q_values[i])])
+                q_values[i][_action] = np.clip((_reward + self.gamma * (1 - _done) *
+                                                target_next_q_values[i][np.argmax(network_next_q_values[i])]),
+                                               q_values[i][_action] - 1, q_values[i][_action] + 1)
 
             self.policy_network.train(states, q_values)
 
