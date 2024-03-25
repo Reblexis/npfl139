@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import collections
-from typing import Self
+from typing import Self, Any
+
+import cv2
+import wandb
+
+from numpy import signedinteger
 
 import gymnasium as gym
 import numpy as np
@@ -16,49 +21,67 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
-parser.add_argument("--epsilon", default=0.9, type=float, help="Exploration factor.")
-parser.add_argument("--epsilon_final", default=0.01, type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=500000, type=int, help="Training episodes.")
-parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=64, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.005, type=float, help="Learning rate.")
-parser.add_argument("--target_update_freq", default=10000, type=int, help="Target update frequency.")
+# Meta
+parser.add_argument("--n_steps", default=100000, type=int, help="Number of training steps.")
+parser.add_argument("--evaluate_for", default=15, type=int, help="Evaluate for number of episodes.")
+parser.add_argument("--evaluate_each", default=5, type=int, help="Evaluate each number of network updates.")
 
+# Preprocessor parameters
+parser.add_argument("--image_size", default=84, type=int, help="Size of the preprocessed image.")
+
+# DQN parameters
+parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
+parser.add_argument("--learning_rate", default=2e-4, type=float, help="Learning rate.")
 parser.add_argument("--replay_buffer_max_length", default=1000000, type=int, help="Maximum replay buffer length.")
-parser.add_argument("--replay_buffer_min_length", default=50000, type=int, help="Minimal replay buffer length.")
-parser.add_argument("--evaluate_each", default=100, type=int, help="Evaluate each number of episodes.")
-parser.add_argument("--evaluation_episodes", default=100, type=int, help="Evaluate each number of episodes.")
+parser.add_argument("--replay_buffer_min_length", default=10000, type=int, help="Minimal replay buffer size.")
+parser.add_argument("--target_update_frequency", default=10000, type=int,
+                    help="Frequency of target network update (in steps).")
+
+parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor.")
+parser.add_argument("--epsilon", default=0.5, type=float, help="Exploration factor.")
+parser.add_argument("--epsilon_final", default=0.1, type=float, help="Final exploration factor.")
+parser.add_argument("--epsilon_final_at", default=50000, type=int,
+                    help="Number of steps until the final exploration factor.")
+
+# Agent parameters
+parser.add_argument("--episode_chunks_size", default=1, type=int,
+                    help="Number of episodes to simulate before training.")
+
+Transition = collections.namedtuple("Transition", ["state", "action", "reward", "done", "next_state"])
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self._model = torch.nn.Sequential(
+            torch.nn.Linear(env.observation_space.shape[0], 128),
+            torch.nn.ReLU(),
+            torch.nn.Linear(128, 128),
+            torch.nn.ReLU(),
+            torch.nn.Linear(128,env.action_space.n),
+        )
+
+    def forward(self, x):
+        return self._model(x)
 
 
 class Network:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Use GPU if available.
+    def __init__(self, args: argparse.Namespace) -> None:
+        self._model = Model().to(DEVICE)
 
-    def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
-        self._model = torch.nn.Sequential(
-            torch.nn.Linear(env.observation_space.shape[0], env.action_space.n),
-        ).to(self.device)
+        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=args.learning_rate)
 
-        self._optimizer = torch.optim.SGD(self._model.parameters(), lr=args.learning_rate)
+        self._loss = torch.nn.SmoothL1Loss()
 
-        self._loss = torch.nn.MSELoss()
-
-        # PyTorch uses uniform initializer $U[-1/sqrt n, 1/sqrt n]$ for both weights and biases.
-        # Keras uses Glorot (also known as Xavier) uniform for weights and zeros for biases.
-        # In some experiments, the Keras initialization works slightly better for RL,
-        # so we use it instead of the PyTorch initialization; but feel free to experiment.
         self._model.apply(wrappers.torch_init_with_xavier_and_zeros)
 
-    # Define a training method. Generally you have two possibilities
-    # - pass new q_values of all actions for a given state; all but one are the same as before
-    # - pass only one new q_value for a given state, and include the index of the action to which
-    #   the new q_value belongs
-    # The code below implements the first option, but you can change it if you want.
-    #
-    # The `wrappers.typed_torch_function` automatically converts input arguments
-    # to PyTorch tensors of given type, and converts the result to a NumPy array.
-    @wrappers.typed_torch_function(device, torch.float32, torch.float32)
-    def train(self, states: torch.Tensor, q_values: torch.Tensor) -> None:
+    def train(self, states: np.ndarray, q_values: np.ndarray) -> float:
+        states = torch.tensor(states, device=DEVICE, dtype=torch.float32)
+        q_values = torch.tensor(q_values, device=DEVICE, dtype=torch.float32)
         self._model.train()
         predictions = self._model(states)
         loss = self._loss(predictions, q_values)
@@ -67,11 +90,13 @@ class Network:
         with torch.no_grad():
             self._optimizer.step()
 
-    @wrappers.typed_torch_function(device, torch.float32)
-    def predict(self, states: torch.Tensor) -> np.ndarray:
+        return loss.item()
+
+    def predict(self, states: np.ndarray) -> np.ndarray:
+        states = torch.tensor(states, device=DEVICE, dtype=torch.float32)
         self._model.eval()
         with torch.no_grad():
-            return self._model(states)
+            return np.array(self._model(states).cpu())
 
     # If you want to use target network, the following method copies weights from
     # a given Network to the current one.
@@ -79,21 +104,200 @@ class Network:
         self._model.load_state_dict(other._model.state_dict())
 
 
-def evaluate(env: wrappers.EvaluationEnv, network: Network, args: argparse.Namespace) -> float:
-    returns = []
-    for _ in range(args.evaluation_episodes):
-        state, done = env.reset(start_evaluation=False)[0], False
-        g = 0
-        while not done:
-            q_values = network.predict(state[np.newaxis])[0]
-            action = np.argmax(q_values)
-            state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
+class Preprocessor:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
 
-            g += reward
+    def __call__(self, state: np.ndarray) -> np.ndarray:
+        return state
 
-        returns.append(g)
-    return np.sum(returns) / args.evaluation_episodes
+
+class Episode:
+    def __init__(self):
+        self.states = []
+        self.actions = []
+        self.rewards = []
+        self.next_states = []
+        self.dones = []
+
+    def add(self, state: np.ndarray, action: signedinteger[Any], reward: float, next_state: np.ndarray,
+            done: bool) -> None:
+        self.states.append(state)
+        self.actions.append(action)
+        self.rewards.append(reward)
+        self.next_states.append(next_state)
+        self.dones.append(done)
+
+    def __len__(self) -> int:
+        return len(self.states)
+
+    def __getitem__(self, index: int) -> tuple[np.ndarray, signedinteger[Any], float, np.ndarray, bool]:
+        return self.states[index], self.actions[index], self.rewards[index], self.next_states[index], self.dones[index]
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+
+class DQN:
+
+    def __init__(self, network: Network, _args: argparse.Namespace) -> None:
+        self.n_steps = _args.n_steps
+
+        self.policy_network = network
+        self.target_network = Network(_args)
+        self.target_network.copy_weights_from(self.policy_network)
+
+        self.replay_buffer = wrappers.ReplayBuffer(max_length=_args.replay_buffer_max_length)
+
+        self.min_replay_buffer_size = _args.replay_buffer_min_length
+        self.batch_size = _args.batch_size
+
+        self.target_update_frequency = _args.target_update_frequency
+
+        self.gamma = _args.gamma
+        self.orig_epsilon = _args.epsilon
+        self.epsilon = _args.epsilon
+        wandb.log({"epsilon": self.epsilon})
+        self.epsilon_final = _args.epsilon_final
+        self.epsilon_final_at = _args.epsilon_final_at
+
+        self.current_episode = 0
+        self.current_step = 0
+        wandb.log({"step": self.current_step})
+        wandb.log({"episode": self.current_episode})
+        self.last_updated_episode = 0
+        self.last_updated_step = 0
+
+        self.network_updates = 0
+        wandb.log({"network_updates": self.network_updates})
+
+        self.target_network_updates = 0
+        wandb.log({"target_network_updates": self.target_network_updates})
+
+    def get_action(self, state: np.ndarray, greedy: bool = False) -> signedinteger[Any]:
+        return np.random.randint(2) if (np.random.rand() < self.epsilon and not greedy) else np.argmax(
+            self.policy_network.predict(state[np.newaxis])[0])
+
+    def collect_episodes(self, episodes: list[Episode]) -> None:
+        for episode in episodes:
+            for state, action, reward, next_state, done in episode:
+                self.replay_buffer.append(Transition(state, action, reward, done, next_state))
+                self.current_step += 1
+                if self.current_step >= self.n_steps:
+                    return
+                wandb.log({"step": self.current_step})
+
+            self.current_episode += 1
+            wandb.log({"episode": self.current_episode})
+
+    def update(self) -> None:
+        self.epsilon = np.interp(self.current_step, [0, self.epsilon_final_at], [self.orig_epsilon, self.epsilon_final])
+        wandb.log({"epsilon": self.epsilon})
+
+        step_diff = self.current_step - self.last_updated_step
+        episode_diff = self.current_episode - self.last_updated_episode
+
+        self.last_updated_step = self.current_step
+        self.last_updated_episode = self.current_episode
+
+        if len(self.replay_buffer) < self.min_replay_buffer_size:
+            return
+
+        losses = []
+        q_values_means = []
+
+        for _ in range(step_diff):
+            if self.network_updates % self.target_update_frequency == 0:
+                self.target_network_updates += 1
+                wandb.log({"target_network_updates": self.target_network_updates})
+                self.target_network.copy_weights_from(self.policy_network)
+
+            transitions = self.replay_buffer.sample(self.batch_size)
+            states, actions, rewards, dones, next_states = zip(*transitions)
+
+            states = np.array(states)
+            next_states = np.array(next_states)
+
+            q_values = self.policy_network.predict(states)
+            network_next_q_values = self.policy_network.predict(next_states)
+            target_next_q_values = self.target_network.predict(next_states)
+
+            for i, (_state, _action, _reward, _done, _next_state) in enumerate(transitions):
+                q_values[i][_action] = (_reward + self.gamma * (1 - _done) *
+                                        target_next_q_values[i][np.argmax(network_next_q_values[i])])
+
+            loss = self.policy_network.train(states, q_values)
+            losses.append(loss)
+            q_values_means.append(np.mean(q_values))
+
+            self.network_updates += 1
+            wandb.log({"network_updates": self.network_updates})
+
+        wandb.log({"loss": np.mean(losses)})
+        wandb.log({"q_values_mean": np.mean(q_values_means)})
+
+    def learn(self, episodes: list[Episode]) -> None:
+        self.collect_episodes(episodes)
+        if self.current_step < self.n_steps:
+            self.update()
+
+
+class Agent:
+    def __init__(self, _env: wrappers.EvaluationEnv, preprocessor: Preprocessor, strategy: DQN,
+                 _args: argparse.Namespace) -> None:
+        self.env = _env
+        self.preprocessor = preprocessor
+        self.strategy = strategy
+
+        self.evaluate_each = _args.evaluate_each
+        self.evaluate_for = _args.evaluate_for
+
+        self.episode_chunks_size = _args.episode_chunks_size
+
+    def preprocess_state(self, state: np.ndarray) -> np.ndarray:
+        return self.preprocessor(state)
+
+    def simulate(self, num_episodes: int, greedy: bool = False) -> list[Episode]:
+        episodes = []
+
+        for k in range(num_episodes):
+            state, done = self.env.reset()[0], False
+            state = self.preprocess_state(state)
+            episode = Episode()
+            reward_sum = 0
+            while not done:
+                action = self.strategy.get_action(state, greedy)
+                next_state, reward, terminated, truncated, _ = self.env.step(action)
+                reward_sum += reward
+                next_state = self.preprocess_state(next_state)
+                done = terminated or truncated
+
+                episode.add(state, action, float(reward), next_state, done)
+
+                state = next_state
+
+            episodes.append(episode)
+        return episodes
+
+    def evaluate(self) -> float:
+        episodes = self.simulate(self.evaluate_for, greedy=True)
+        rewards = [sum(episode.rewards) for episode in episodes]
+        return sum(rewards) / len(rewards)
+
+    def train(self) -> None:
+        i = 0
+        while self.strategy.current_step < self.strategy.n_steps:
+            episodes = self.simulate(self.episode_chunks_size)
+            self.strategy.learn(episodes)
+            if self.strategy.current_step > self.strategy.n_steps:
+                break
+
+            if i % self.evaluate_each == 0:
+                print(f"Train step {i}")
+                wandb.log({"eval_reward": self.evaluate()})
+            i += 1
+
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set random seeds and the number of threads
@@ -103,89 +307,32 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(args.threads)
 
-    # Construct the network
-    network = Network(env, args)
-    target_network = Network(env, args)
-
-    # Replay memory; the `max_length` parameter can be passed to limit its size.
-    replay_buffer = wrappers.ReplayBuffer(max_length=args.replay_buffer_max_length)
-    Transition = collections.namedtuple("Transition", ["state", "action", "reward", "done", "next_state"])
-
-    epsilon = args.epsilon
-    training = True
-    steps = 0
-    while training:
-        # Perform episode
-        state, done = env.reset()[0], False
-        while not done:
-            q_values = network.predict(state[np.newaxis])[0]
-            action = np.random.randint(env.action_space.n) if np.random.rand() < epsilon else np.argmax(q_values)
-
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
-
-            # Append state, action, reward, done and next_state to replay_buffer
-            replay_buffer.append(Transition(state, action, reward, done, next_state))
-
-            # If the `replay_buffer` is large enough, perform training using
-            # a batch of `args.batch_size` uniformly randomly chosen transitions.
-            #
-            # The `replay_buffer` offers a method with signature
-            #   sample(self, size, generator=np.random, replace=True) -> list[Transition]
-            # which returns uniformly selected batch of `size` transitions, either with
-            # replacement (which is much faster, and hence the default) or without.
-            # By default, `np.random` is used to generate the random indices, but you can
-            # pass your own `np.random.RandomState` instance.
-
-            # After you compute suitable targets, you can train the network by
-            #   network.train(...)
-
-            if len(replay_buffer) >= args.replay_buffer_min_length:
-                transitions = replay_buffer.sample(args.batch_size)
-                states, actions, rewards, dones, next_states = zip(*transitions)
-
-                q_values = network.predict(states)
-                network_next_q_values = network.predict(next_states)
-                target_next_q_values = target_network.predict(next_states)
-
-                for i, (_state, _action, _reward, _done, _next_state) in enumerate(transitions):
-                    q_values[i][_action] = (_reward + args.gamma * (1 - _done) *
-                                            target_next_q_values[i][np.argmax(network_next_q_values[i])])
-
-                network.train(states, q_values)
-
-            if steps % args.target_update_freq == 0:
-                print(f"Currect step: {steps}, updating target network.")
-                target_network.copy_weights_from(network)
-
-            state = next_state
-            steps += 1
-
-            if args.epsilon_final_at:
-                epsilon = np.interp(steps, [0, args.epsilon_final_at], [args.epsilon, args.epsilon_final])
-
-        if steps>args.epsilon_final_at and steps % args.evaluate_each == 0:
-            evaluation_score = evaluate(env, network, args)
-            print(f"Current step: {steps}, evaluation score: {evaluation_score}")
-            if evaluation_score > 460:
-                training = False
+    # Create the network
+    agent = Agent(env, Preprocessor(args), DQN(Network(args), args), args)
+    agent.train()
 
     # Final evaluation
     # Save network
-    #network._model.load_state_dict(torch.load("model.pth", map_location=network.device))
-    torch.save(network._model.state_dict(), "model.pth")
+    # network._model.load_state_dict(torch.load("model.pth", map_location=network.device))
+
+    #torch.save(network._model.state_dict(), "model.pth")
 
     while True:
         state, done = env.reset(start_evaluation=True)[0], False
         while not done:
             # TODO: Choose (greedy) action
-            action = np.argmax(network.predict(state[np.newaxis])[0])
+            action = agent.strategy.get_action(agent.preprocess_state(state), greedy=True)
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
 
 if __name__ == "__main__":
     args = parser.parse_args([] if "__file__" not in globals() else None)
+
+    wandb.init(
+        project="cartpole",
+        config=vars(args),
+    )
 
     # Create the environment
     env = wrappers.EvaluationEnv(gym.make("CartPole-v1"), args.seed, args.render_each)

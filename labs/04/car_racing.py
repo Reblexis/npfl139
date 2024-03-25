@@ -88,13 +88,13 @@ class Network:
     def __init__(self, args: argparse.Namespace) -> None:
         self._model = Model().to(DEVICE)
 
-        self._optimizer = torch.optim.SGD(self._model.parameters(), lr=args.learning_rate)
+        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=args.learning_rate)
 
         self._loss = torch.nn.MSELoss()
 
         self._model.apply(wrappers.torch_init_with_xavier_and_zeros)
 
-    def train(self, states: np.ndarray, q_values: np.ndarray) -> None:
+    def train(self, states: np.ndarray, q_values: np.ndarray) -> float:
         states = torch.tensor(states, device=DEVICE, dtype=torch.float32)
         q_values = torch.tensor(q_values, device=DEVICE, dtype=torch.float32)
         self._model.train()
@@ -104,6 +104,8 @@ class Network:
         loss.backward()
         with torch.no_grad():
             self._optimizer.step()
+
+        return loss.item()
 
     def predict(self, states: np.ndarray) -> np.ndarray:
         states = torch.tensor(states, device=DEVICE, dtype=torch.float32)
@@ -174,6 +176,7 @@ class DQN:
         self.target_update_frequency = _args.target_update_frequency
 
         self.gamma = _args.gamma
+        self.orig_epsilon = _args.epsilon
         self.epsilon = _args.epsilon
         wandb.log({"epsilon": self.epsilon})
         self.epsilon_final = _args.epsilon_final
@@ -186,8 +189,11 @@ class DQN:
         self.last_updated_episode = 0
         self.last_updated_step = 0
 
-        self.train_steps = 0
-        wandb.log({"train_step": self.train_steps})
+        self.network_updates = 0
+        wandb.log({"network_updates": self.network_updates})
+
+        self.target_network_updates = 0
+        wandb.log({"target_network_updates": self.target_network_updates})
 
     def get_action(self, state: np.ndarray, greedy: bool = False) -> signedinteger[Any]:
         return np.random.randint(5) if (np.random.rand() < self.epsilon and not greedy) else np.argmax(
@@ -206,7 +212,7 @@ class DQN:
             wandb.log({"episode": self.current_episode})
 
     def update(self) -> None:
-        self.epsilon = np.interp(self.current_step, [0, self.epsilon_final_at], [self.epsilon, self.epsilon_final])
+        self.epsilon = np.interp(self.current_step, [0, self.epsilon_final_at], [self.orig_epsilon, self.epsilon_final])
         wandb.log({"epsilon": self.epsilon})
 
         step_diff = self.current_step - self.last_updated_step
@@ -218,8 +224,13 @@ class DQN:
         if len(self.replay_buffer) < self.min_replay_buffer_size:
             return
 
+        losses = []
+        q_values_means = []
+
         for _ in range(step_diff):
-            if self.train_steps % self.target_update_frequency == 0:
+            if self.network_updates % self.target_update_frequency == 0:
+                self.target_network_updates += 1
+                wandb.log({"target_network_updates": self.target_network_updates})
                 self.target_network.copy_weights_from(self.policy_network)
 
             transitions = self.replay_buffer.sample(self.batch_size)
@@ -233,14 +244,18 @@ class DQN:
             target_next_q_values = self.target_network.predict(next_states)
 
             for i, (_state, _action, _reward, _done, _next_state) in enumerate(transitions):
-                q_values[i][_action] = np.clip((_reward + self.gamma * (1 - _done) *
-                                                target_next_q_values[i][np.argmax(network_next_q_values[i])]),
-                                               q_values[i][_action] - 1, q_values[i][_action] + 1)
+                q_values[i][_action] = (_reward + self.gamma * (1 - _done) *
+                                        target_next_q_values[i][np.argmax(network_next_q_values[i])])
 
-            self.policy_network.train(states, q_values)
+            loss = self.policy_network.train(states, q_values)
+            losses.append(loss)
+            q_values_means.append(np.mean(q_values))
 
-            self.train_steps += 1
-            wandb.log({"train_step": self.train_steps})
+            self.network_updates += 1
+            wandb.log({"network_udpate": self.network_updates})
+
+        wandb.log({"loss": np.mean(losses)})
+        wandb.log({"q_values_mean": np.mean(q_values_means)})
 
     def learn(self, episodes: list[Episode]) -> None:
         self.collect_episodes(episodes)
@@ -266,19 +281,23 @@ class Agent:
     def simulate(self, num_episodes: int, greedy: bool = False) -> list[Episode]:
         episodes = []
 
-        for _ in range(num_episodes):
+        for k in range(num_episodes):
             state, done = self.env.reset()[0], False
             state = self.preprocess_state(state)
             episode = Episode()
+            reward_sum = 0
             while not done:
                 action = self.strategy.get_action(state, greedy)
                 next_state, reward, terminated, truncated, _ = self.env.step(action)
+                reward /= 100.0
+                reward_sum += reward
                 next_state = self.preprocess_state(next_state)
-                done = terminated or truncated
+                done = terminated or truncated or reward_sum < -0.3
 
                 episode.add(state, action, float(reward), next_state, done)
 
                 state = next_state
+
             episodes.append(episode)
         return episodes
 
@@ -290,13 +309,14 @@ class Agent:
     def train(self) -> None:
         i = 0
         while self.strategy.current_step < self.strategy.n_steps:
+            print(f"Train step {i}")
             episodes = self.simulate(self.episode_chunks_size)
             self.strategy.learn(episodes)
             if self.strategy.current_step > self.strategy.n_steps:
                 break
 
             if i % self.evaluate_each == 0:
-                wandb.log({"eval_reward": self.evaluate()})
+                wandb.log({"eval_reward": self.evaluate() * 100})
             i += 1
 
 

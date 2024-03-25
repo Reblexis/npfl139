@@ -6,9 +6,9 @@ metric:
   name: eval_reward
 parameters:
   n_steps:
-    value: 100000
+    value: 1000000
   epsilon_final_at:
-    value: 100000
+    value: 1000000
   learning_rate:
     distribution: log_uniform_values
     min: 1e-5
