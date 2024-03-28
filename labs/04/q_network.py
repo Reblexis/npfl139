@@ -30,21 +30,21 @@ parser.add_argument("--evaluate_each", default=5, type=int, help="Evaluate each 
 parser.add_argument("--image_size", default=84, type=int, help="Size of the preprocessed image.")
 
 # DQN parameters
-parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
-parser.add_argument("--learning_rate", default=2e-4, type=float, help="Learning rate.")
+parser.add_argument("--batch_size", default=55, type=int, help="Batch size.")
+parser.add_argument("--learning_rate", default=0.001896, type=float, help="Learning rate.")
 parser.add_argument("--replay_buffer_max_length", default=1000000, type=int, help="Maximum replay buffer length.")
 parser.add_argument("--replay_buffer_min_length", default=10000, type=int, help="Minimal replay buffer size.")
-parser.add_argument("--target_update_frequency", default=10000, type=int,
+parser.add_argument("--target_update_frequency", default=4200, type=int,
                     help="Frequency of target network update (in steps).")
 
 parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor.")
-parser.add_argument("--epsilon", default=0.5, type=float, help="Exploration factor.")
-parser.add_argument("--epsilon_final", default=0.1, type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=50000, type=int,
+parser.add_argument("--epsilon", default=0.9845, type=float, help="Exploration factor.")
+parser.add_argument("--epsilon_final", default=0.03014, type=float, help="Final exploration factor.")
+parser.add_argument("--epsilon_final_at", default=75326, type=int,
                     help="Number of steps until the final exploration factor.")
 
 # Agent parameters
-parser.add_argument("--episode_chunks_size", default=1, type=int,
+parser.add_argument("--episode_chunks_size", default=13, type=int,
                     help="Number of episodes to simulate before training.")
 
 Transition = collections.namedtuple("Transition", ["state", "action", "reward", "done", "next_state"])
