@@ -15,10 +15,10 @@ parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
-parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--episodes", default=10000, type=int, help="Training episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=128, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
+parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate.")
 
 
 class Network:
@@ -85,10 +85,12 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Training
     for _ in range(args.episodes // args.batch_size):
         batch_states, batch_actions, batch_returns = [], [], []
+        scores = []
         for _ in range(args.batch_size):
             # Perform episode
             states, actions, rewards = [], [], []
             state, done = env.reset()[0], False
+            score = 0
             while not done:
                 # TODO: Choose `action` according to probabilities
                 # distribution (see `np.random.choice`), which you
@@ -102,8 +104,11 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 actions.append(action)
                 rewards.append(reward)
 
+                score += reward
+
                 state = next_state
 
+            scores.append(score)
             # TODO: Compute returns by summing rewards (with discounting)
             returns = [0] * len(rewards)
             returns[-1] = rewards[-1]
@@ -114,6 +119,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             batch_states.extend(states)
             batch_actions.extend(actions)
             batch_returns.extend(returns)
+
+        print(sum(scores) / args.batch_size)
+        if sum(scores) / args.batch_size > 495:
+            break
 
         # TODO: Train using the generated batch.
         network.train(batch_states, batch_actions, batch_returns)
