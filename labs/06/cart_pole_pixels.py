@@ -5,7 +5,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from torch import nn
-import wandb
+#import wandb
 from PIL import Image
 import cv2
 
@@ -15,7 +15,7 @@ cart_pole_pixels_environment.register()
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
+parser.add_argument("--recodex", default=True, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
@@ -143,6 +143,19 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Construct the network
     network = Network(env, args)
 
+    if args.recodex:
+        network.load()
+        # Final evaluation
+        while True:
+            state, done = env.reset(start_evaluation=True)[0], False
+            state = preprocess(state)
+            while not done:
+                action = np.argmax(network.predict(state[np.newaxis]).squeeze())
+                state, reward, terminated, truncated, _ = env.step(action)
+                state = preprocess(state)
+                done = terminated or truncated
+
+
     scores = []
     # Training
     for _ in range(args.episodes // args.batch_size):
@@ -179,11 +192,11 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             batch_returns.extend(returns)
 
         avg_score = sum(scores[-10:]) / 10
-        wandb.log({"avg_score": avg_score})
-        wandb.log({"episode": env.episode})
+        #wandb.log({"avg_score": avg_score})
+        #wandb.log({"episode": env.episode})
         if avg_score > 490:
             score = evaluate(env, network)
-            wandb.log({"eval_score": score})
+            #wandb.log({"eval_score": score})
             if score > 490:
                 network.save()
                 break
@@ -192,26 +205,16 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
 
 
-    # Final evaluation
-    while True:
-        state, done = env.reset(start_evaluation=True)[0], False
-        state = preprocess(state)
-        while not done:
-            action = np.argmax(network.predict(state[np.newaxis]).squeeze())
-            state, reward, terminated, truncated, _ = env.step(action)
-            state = preprocess(state)
-            done = terminated or truncated
-
-
 if __name__ == "__main__":
     args = parser.parse_args([] if "__file__" not in globals() else None)
     # Create the environment
     env = wrappers.EvaluationEnv(gym.make("CartPolePixels-v1"), args.seed, args.render_each)
-
+    """
     wandb.init(
         project="cartpole_pixels",
         config=vars(args),
     )
+    """
 
     main(env, args)
 
