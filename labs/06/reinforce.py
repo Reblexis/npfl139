@@ -14,11 +14,11 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
-parser.add_argument("--episodes", default=..., type=int, help="Training episodes.")
-parser.add_argument("--gamma", default=..., type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=..., type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=..., type=float, help="Learning rate.")
+parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
+parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
+parser.add_argument("--hidden_layer_size", default=128, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 
 
 class Network:
@@ -29,15 +29,19 @@ class Network:
         # TODO: Create a suitable model. The predict method assumes
         # it is stored as `self._model` and that it returns logits.
         self._model = torch.nn.Sequential(
-            ...
+            torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(args.hidden_layer_size, args.hidden_layer_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(args.hidden_layer_size, env.action_space.n),
         ).to(self.device)
 
         # TODO: Define an optimizer. Using `torch.optim.Adam` optimizer with
         # the given `args.learning_rate` is a good default.
-        self._optimizer = ...
+        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=args.learning_rate)
 
         # TODO: Define the loss (most likely some `torch.nn.*Loss`).
-        self._loss = ...
+        self._loss = torch.nn.CrossEntropyLoss(reduction="none")
 
         # PyTorch uses uniform initializer $U[-1/sqrt n, 1/sqrt n]$ for both weights and biases.
         # Keras uses Glorot (also known as Xavier) uniform for weights and zeros for biases.
@@ -51,7 +55,12 @@ class Network:
     # to PyTorch tensors of given type, and converts the result to a NumPy array.
     @wrappers.typed_torch_function(device, torch.float32, torch.int64, torch.float32)
     def train(self, states: torch.Tensor, actions: torch.Tensor, returns: torch.Tensor) -> None:
-        raise NotImplementedError()
+        self._model.train()
+        self._optimizer.zero_grad()
+        logits = self._model(states)
+        loss = self._loss(logits, actions) @ returns
+        loss.backward()
+        self._optimizer.step()
 
     @wrappers.typed_torch_function(device, torch.float32)
     def predict(self, states: torch.Tensor) -> np.ndarray:
@@ -84,7 +93,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 # TODO: Choose `action` according to probabilities
                 # distribution (see `np.random.choice`), which you
                 # can compute using `network.predict` and current `state`.
-                action = ...
+                action = np.random.choice(env.action_space.n, p=network.predict(state))
 
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
@@ -96,17 +105,25 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 state = next_state
 
             # TODO: Compute returns by summing rewards (with discounting)
+            returns = [0] * len(rewards)
+            returns[-1] = rewards[-1]
+            for i in reversed(range(len(rewards) - 1)):
+                returns[i] = rewards[i] + args.gamma * returns[i + 1]
 
             # TODO: Add states, actions and returns to the training batch
+            batch_states.extend(states)
+            batch_actions.extend(actions)
+            batch_returns.extend(returns)
 
         # TODO: Train using the generated batch.
+        network.train(batch_states, batch_actions, batch_returns)
 
     # Final evaluation
     while True:
         state, done = env.reset(start_evaluation=True)[0], False
         while not done:
             # TODO: Choose a greedy action
-            action = ...
+            action = np.argmax(network.predict(state))
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
