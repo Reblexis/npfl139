@@ -7,7 +7,6 @@ import torch
 from torch import nn
 #import wandb
 from PIL import Image
-import cv2
 
 import cart_pole_pixels_environment
 import wrappers
@@ -102,10 +101,17 @@ class Network:
     def save(self):
         torch.save(self.policy_model.state_dict(), "policy_model.pth")
         torch.save(self.value_model.state_dict(), "value_model.pth")
+        # save cpu versions
+        torch.save(self.policy_model.to(torch.device("cpu")).state_dict(), "policy_model_cpu.pth")
+        torch.save(self.value_model.to(torch.device("cpu")).state_dict(), "value_model_cpu.pth")
 
     def load(self):
         self.policy_model.load_state_dict(torch.load("policy_model.pth"))
         self.value_model.load_state_dict(torch.load("value_model.pth"))
+
+    def load_cpu(self):
+        self.policy_model.load_state_dict(torch.load("policy_model_cpu.pth"))
+        self.value_model.load_state_dict(torch.load("value_model_cpu.pth"))
 
 
 def preprocess(state: np.ndarray) -> np.ndarray:
@@ -144,7 +150,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     network = Network(env, args)
 
     if args.recodex:
-        network.load()
+        network.load_cpu()
         # Final evaluation
         while True:
             state, done = env.reset(start_evaluation=True)[0], False
