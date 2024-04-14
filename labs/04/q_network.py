@@ -34,13 +34,13 @@ parser.add_argument("--batch_size", default=55, type=int, help="Batch size.")
 parser.add_argument("--learning_rate", default=0.001896, type=float, help="Learning rate.")
 parser.add_argument("--replay_buffer_max_length", default=1000000, type=int, help="Maximum replay buffer length.")
 parser.add_argument("--replay_buffer_min_length", default=10000, type=int, help="Minimal replay buffer size.")
-parser.add_argument("--target_update_frequency", default=4200, type=int,
+parser.add_argument("--target_update_frequency", default=4200000, type=int,
                     help="Frequency of target network update (in steps).")
 
 parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor.")
 parser.add_argument("--epsilon", default=0.9845, type=float, help="Exploration factor.")
-parser.add_argument("--epsilon_final", default=0.03014, type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=75326, type=int,
+parser.add_argument("--epsilon_final", default=0.3014, type=float, help="Final exploration factor.")
+parser.add_argument("--epsilon_final_at", default=1326, type=int,
                     help="Number of steps until the final exploration factor.")
 
 # Agent parameters
@@ -57,12 +57,11 @@ class Model(torch.nn.Module):
         super().__init__()
 
         self._model = torch.nn.Sequential(
-            torch.nn.Linear(env.observation_space.shape[0], 128),
+            torch.nn.Linear(env.observation_space.shape[0], 50),
             torch.nn.ReLU(),
-            torch.nn.Linear(128, 128),
-            torch.nn.ReLU(),
-            torch.nn.Linear(128,env.action_space.n),
+            torch.nn.Linear(50, env.action_space.n),
         )
+
 
     def forward(self, x):
         return self._model(x)
@@ -75,7 +74,7 @@ class Network:
 
         self._optimizer = torch.optim.Adam(self._model.parameters(), lr=args.learning_rate)
 
-        self._loss = torch.nn.SmoothL1Loss()
+        self._loss = torch.nn.MSELoss()
 
         self._model.apply(wrappers.torch_init_with_xavier_and_zeros)
 

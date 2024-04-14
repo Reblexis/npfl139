@@ -26,16 +26,6 @@ class Network:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
-        # TODO: Create a suitable model.
-        #
-        # Apart from the policy network defined in `reinforce` assignment, you
-        # also need a value network for computing the baseline (it can be for
-        # example another independent model with a single hidden layer and
-        # an output layer with a single output and no activation).
-        #
-        # Using Adam optimizer with given `args.learning_rate` for both models
-        # is a good default.
-
         self.policy_model = torch.nn.Sequential(
             torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size),
             torch.nn.ReLU(),
@@ -57,10 +47,6 @@ class Network:
         self.policy_model.apply(wrappers.torch_init_with_xavier_and_zeros)
         self.value_model.apply(wrappers.torch_init_with_xavier_and_zeros)
 
-    # TODO: Define a training method.
-    #
-    # The `wrappers.typed_torch_function` automatically converts input arguments
-    # to PyTorch tensors of given type, and converts the result to a NumPy array.
     @wrappers.typed_torch_function(device, torch.float32, torch.int64, torch.float32)
     def train(self, states: torch.Tensor, actions: torch.Tensor, returns: torch.Tensor) -> None:
         # You should:
