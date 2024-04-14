@@ -14,14 +14,14 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--entropy_regularization", default=0.01, type=float, help="Entropy regularization weight.")
+parser.add_argument("--entropy_regularization", default=0, type=float, help="Entropy regularization weight.")
 parser.add_argument("--envs", default=8, type=int, help="Number of parallel environments.")
 parser.add_argument("--evaluate_each", default=100, type=int, help="Evaluate each number of batches.")
 parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate.")
-parser.add_argument("--tiles", default=16, type=int, help="Tiles to use.")
+parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
+parser.add_argument("--tiles", default=8, type=int, help="Tiles to use.")
 
 
 class Network:
@@ -52,22 +52,25 @@ class Network:
         # layer with `args.hidden_layer_size` ReLU units and then predicting
         # the value function.
 
+        self.actions_min = torch.tensor(env.action_space.low).to(self.device)
+        self.actions_max = torch.tensor(env.action_space.high).to(self.device)
+
         self.policy_mus_model = torch.nn.Sequential(
-            torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size),
+            torch.nn.Linear(env.observation_space.nvec[-1], args.hidden_layer_size),
             torch.nn.ReLU(),
-            torch.nn.Linear(args.hidden_layer_size, env.action_space.n),
+            torch.nn.Linear(args.hidden_layer_size, env.action_space.shape[0]),
             torch.nn.Tanh(),
         ).to(self.device)
 
         self.policy_sds_model = torch.nn.Sequential(
-            torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size),
+            torch.nn.Linear(env.observation_space.nvec[-1], args.hidden_layer_size),
             torch.nn.ReLU(),
-            torch.nn.Linear(args.hidden_layer_size, env.action_space.n),
+            torch.nn.Linear(args.hidden_layer_size, env.action_space.shape[0]),
             torch.nn.Softplus(),
         ).to(self.device)
 
         self.value_model = torch.nn.Sequential(
-            torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size),
+            torch.nn.Linear(env.observation_space.nvec[-1], args.hidden_layer_size),
             torch.nn.ReLU(),
             torch.nn.Linear(args.hidden_layer_size, 1),
         ).to(self.device)
@@ -84,7 +87,7 @@ class Network:
 
     # The `wrappers.typed_torch_function` automatically converts input arguments
     # to PyTorch tensors of given type, and converts the result to a NumPy array.
-    @wrappers.typed_torch_function(device, torch.int64, torch.float32, torch.float32)
+    @wrappers.typed_torch_function(device, torch.float32, torch.float32, torch.float32)
     def train(self, states: torch.Tensor, actions: torch.Tensor, returns: torch.Tensor) -> None:
         # TODO: Run the model on given `states` and compute
         # `sds`, `mus` and predicted values. Then create `action_distribution` using
@@ -114,30 +117,33 @@ class Network:
         mus = self.policy_mus_model(states)
         sds = self.policy_sds_model(states)
         values = self.value_model(states).squeeze()
+        value_loss = self.value_loss(values, returns)
+        values_no_grad = values.detach()
+        value_loss.backward()
 
         action_distribution = torch.distributions.Normal(mus, sds)
         action_log_probs = action_distribution.log_prob(actions).sum(dim=1)
-        advantage = returns - values
+        advantage = returns - values_no_grad
 
         policy_loss = -(action_log_probs * advantage).mean() - args.entropy_regularization * action_distribution.entropy().mean()
         policy_loss.backward()
 
         self.policy_mus_optimizer.step()
         self.policy_sds_optimizer.step()
+        self.value_optimizer.step()
 
-        value_loss = self.value_loss(values, returns)
-        value_loss.backward()
 
-    @wrappers.typed_torch_function(device, torch.int64)
+    @wrappers.typed_torch_function(device, torch.float32)
     def predict_actions(self, states: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
         self.policy_mus_model.eval()
         self.policy_sds_model.eval()
         with torch.no_grad():
             mus = self.policy_mus_model(states)
+            mus = self.actions_min + (self.actions_max - self.actions_min) * (torch.tanh(mus) + 1) / 2
             sds = self.policy_sds_model(states)
             return mus, sds
 
-    @wrappers.typed_torch_function(device, torch.int64)
+    @wrappers.typed_torch_function(device, torch.float32)
     def predict_values(self, states: torch.Tensor) -> np.ndarray:
         self.value_model.eval()
         with torch.no_grad():
@@ -145,8 +151,10 @@ class Network:
             return values
 
 def preprocess_states(states: np.ndarray) -> np.ndarray:
-    print(states)
-    return states
+    prep_states = np.zeros((len(states), env.observation_space.nvec[-1]), dtype=np.float32)
+    for i, state in enumerate(states):
+        prep_states[i, state] = 1.0
+    return prep_states
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set random seeds and the number of threads
@@ -161,11 +169,14 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     def evaluate_episode(start_evaluation: bool = False, logging: bool = True) -> float:
         rewards, state, done = 0, env.reset(start_evaluation=start_evaluation, logging=logging)[0], False
+        state = preprocess_states([state])[0]
         while not done:
             # TODO: Predict the action using the greedy policy.
             action_info = network.predict_actions(state)
             action = np.random.normal(action_info[0], action_info[1])
+            action = np.clip(action, env.action_space.low, env.action_space.high)
             state, reward, terminated, truncated, _ = env.step(action)
+            state = preprocess_states([state])[0]
             done = terminated or truncated
             rewards += reward
         return rewards
@@ -186,6 +197,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             # range, for example using `np.clip`.
             action_infos = network.predict_actions(states)
             actions = np.array([np.random.normal(mu, sd) for mu, sd in zip(*action_infos)])
+            actions = np.clip(actions, env.action_space.low, env.action_space.high)
 
             # Perform steps in the vectorized environment
             next_states, rewards, terminated, truncated, _ = vector_env.step(actions)
