@@ -15,12 +15,12 @@ parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--entropy_regularization", default=0.1, type=float, help="Entropy regularization weight.")
-parser.add_argument("--envs", default=16, type=int, help="Number of parallel environments.")
+parser.add_argument("--envs", default=8, type=int, help="Number of parallel environments.")
 parser.add_argument("--evaluate_each", default=100, type=int, help="Evaluate each number of batches.")
 parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
+parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate.")
 parser.add_argument("--tiles", default=8, type=int, help="Tiles to use.")
 
 
@@ -111,6 +111,7 @@ class Network:
         self.policy_mus_model.apply(wrappers.torch_init_with_xavier_and_zeros)
         self.policy_sds_model.apply(wrappers.torch_init_with_xavier_and_zeros)
         self.value_model.apply(wrappers.torch_init_with_xavier_and_zeros)
+        self.entropy_regularization = args.entropy_regularization
 
     # The `wrappers.typed_torch_function` automatically converts input arguments
     # to PyTorch tensors of given type, and converts the result to a NumPy array.
@@ -133,25 +134,54 @@ class Network:
         # Train the critic using mean square error of the `returns` and predicted values.
 
         self.policy_mus_model.train()
+        self.policy_mus_model.zero_grad()
+
         self.policy_sds_model.train()
+        self.policy_sds_model.zero_grad()
+
         self.value_model.train()
+        self.value_model.zero_grad()
 
         mus = self.policy_mus_model(states)
         sds = self.policy_sds_model(states)
         values = self.value_model(states).squeeze()
+        values_no_grad = values.detach()
         value_loss = self.value_loss(values, returns)
+        value_loss.backward()
 
         action_distribution = torch.distributions.Normal(mus, sds)
-        action_log_probs = action_distribution.log_prob(actions)
-        advantage = returns - values.detach()
+        action_log_probs = action_distribution.log_prob(actions).squeeze()
+        advantage = returns - values_no_grad
 
-        policy_loss = -(action_log_probs * advantage).mean() - args.entropy_regularization * action_distribution.entropy().mean()
+        policy_loss = -(action_log_probs @ advantage) - self.entropy_regularization * action_distribution.entropy().mean()
         policy_loss.backward()
-        value_loss.backward()
 
         self.policy_mus_optimizer.step()
         self.policy_sds_optimizer.step()
         self.value_optimizer.step()
+
+    def save(self):
+        torch.save(self.policy_mus_model.state_dict(), "policy_mus_model.pth")
+        torch.save(self.policy_sds_model.state_dict(), "policy_sds_model.pth")
+        torch.save(self.value_model.state_dict(), "value_model.pth")
+        # save cpu versions
+        torch.save(self.policy_mus_model.to(torch.device("cpu")).state_dict(), "policy_mus_model_cpu.pth")
+        torch.save(self.policy_sds_model.to(torch.device("cpu")).state_dict(), "policy_sds_model_cpu.pth")
+        torch.save(self.value_model.to(torch.device("cpu")).state_dict(), "value_model_cpu.pth")
+
+        self.policy_mus_model.to(DEVICE)
+        self.policy_sds_model.to(DEVICE)
+        self.value_model.to(DEVICE)
+
+    def load(self):
+        self.policy_mus_model.load_state_dict(torch.load("policy_mus_model.pth"))
+        self.policy_sds_model.load_state_dict(torch.load("policy_sds_model.pth"))
+        self.value_model.load_state_dict(torch.load("value_model.pth"))
+
+    def load_cpu(self):
+        self.policy_mus_model.load_state_dict(torch.load("policy_mus_model_cpu.pth"))
+        self.policy_sds_model.load_state_dict(torch.load("policy_sds_model_cpu.pth"))
+        self.value_model.load_state_dict(torch.load("value_model_cpu.pth"))
 
     @wrappers.typed_torch_function(DEVICE, torch.float32)
     def predict_actions(self, states: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
@@ -170,13 +200,6 @@ class Network:
             return values
 
 
-def preprocess_states(states: np.ndarray) -> np.ndarray:
-    prep_states = np.zeros((len(states), env.observation_space.nvec[-1]), dtype=np.float32)
-    for i, state in enumerate(states):
-        prep_states[i, state] = 1.0
-
-    return prep_states
-
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set random seeds and the number of threads
@@ -188,6 +211,13 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     # Construct the network
     network = Network(env, args)
+
+    def preprocess_states(states: np.ndarray) -> np.ndarray:
+        prep_states = np.zeros((len(states), env.observation_space.nvec[-1]), dtype=np.float32)
+        for i, state in enumerate(states):
+            prep_states[i, state] = 1.0
+
+        return prep_states
 
     def evaluate_episode(start_evaluation: bool = False, logging: bool = True) -> float:
         rewards, state, done = 0, env.reset(start_evaluation=start_evaluation, logging=logging)[0], False
@@ -209,14 +239,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     states = vector_env.reset(seed=args.seed)[0]
     states = preprocess_states(states)
 
-    training, autoreset = True, np.zeros(args.envs, dtype=bool)
+    training, autoreset = not args.recodex, np.zeros(args.envs, dtype=bool)
     while training:
         # Training
         for i in range(args.evaluate_each):
-            # TODO: Predict action distribution using `network.predict_actions`
-            # and then sample it using for example `np.random.normal`. Do not
-            # forget to clip the actions to the `env.action_space.{low,high}`
-            # range, for example using `np.clip`.
             action_infos = network.predict_actions(states)
             actions = np.array([np.random.normal(mu, sd) for mu, sd in zip(*action_infos)])
             actions = np.clip(actions, env.action_space.low, env.action_space.high)
@@ -224,10 +250,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             # Perform steps in the vectorized environment
             next_states, rewards, terminated, truncated, _ = vector_env.step(actions)
             next_states = preprocess_states(next_states)
-            autoreset = terminated | truncated
+            dones = terminated | truncated
 
             # TODO(paac): Compute estimates of returns by one-step bootstrapping
-            estimated_returns = rewards + args.gamma * network.predict_values(next_states) * ~autoreset
+            estimated_returns = rewards + ~dones * args.gamma * network.predict_values(next_states)
 
             # TODO(paac): Train network using current states, chosen actions and estimated returns.
             # However, note that when `autoreset[i] == True`, the `i`-th environment has
@@ -237,12 +263,15 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             network.train(states, actions, estimated_returns)
 
             states = next_states
+            autoreset = dones
 
         # Periodic evaluation
         returns = [evaluate_episode() for _ in range(args.evaluate_for)]
-        if np.mean(returns) > 90:
+        if np.mean(returns) > 92:
+            network.save()
             break
 
+    network.load_cpu()
     # Final evaluation
     while True:
         evaluate_episode(start_evaluation=True)

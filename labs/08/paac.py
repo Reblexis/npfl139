@@ -16,12 +16,12 @@ parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--entropy_regularization", default=0.1, type=float, help="Entropy regularization weight.")
-parser.add_argument("--envs", default=8, type=int, help="Number of parallel environments.")
+parser.add_argument("--envs", default=16, type=int, help="Number of parallel environments.")
 parser.add_argument("--evaluate_each", default=100, type=int, help="Evaluate each number of batches.")
 parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate.")
+parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 
 
 class Network:
@@ -128,6 +128,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             actions = np.array([np.random.choice(env.action_space.n, p=network.predict_actions(state)) for state in states])
 
             # Perform steps in the vectorized environment
+
             next_states, rewards, terminated, truncated, _ = vector_env.step(actions)
             dones = terminated | truncated
 
