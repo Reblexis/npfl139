@@ -12,7 +12,7 @@ import wrappers
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--env", default="InvertedDoublePendulum-v5", type=str, help="Environment.")
-parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
+parser.add_argument("--recodex", default=True, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
@@ -212,7 +212,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         return rewards
 
     noise = OrnsteinUhlenbeckNoise(env.action_space.shape[0], 0, args.noise_theta, args.noise_sigma)
-    training = True
+    training = not args.recodex
     env_thresholds = {"Pendulum-v1": -180, "InvertedDoublePendulum-v5" : 9200}
     while training:
         # Training
@@ -250,6 +250,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             network.save_to_cpu(args.env)
             break
 
+    network.load_from_cpu(args.env)
     # Final evaluation
     while True:
         evaluate_episode(start_evaluation=True)
