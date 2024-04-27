@@ -17,16 +17,48 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
+parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
 parser.add_argument("--evaluate_each", default=50, type=int, help="Evaluate each number of episodes.")
 parser.add_argument("--evaluate_for", default=50, type=int, help="Evaluate the given number of episodes.")
-parser.add_argument("--gamma", default=..., type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=..., type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=..., type=float, help="Learning rate.")
+parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
+parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 parser.add_argument("--noise_sigma", default=0.2, type=float, help="UB noise sigma.")
 parser.add_argument("--noise_theta", default=0.15, type=float, help="UB noise theta.")
-parser.add_argument("--target_tau", default=..., type=float, help="Target network update weight.")
+parser.add_argument("--target_tau", default=0.01, type=float, help="Target network update weight.")
 
+
+class Actor(torch.nn.Module):
+    def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
+        super().__init__()
+
+        self.linear1 = torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size)
+        self.relu1 = torch.nn.ReLU()
+        self.linear2 = torch.nn.Linear(args.hidden_layer_size, env.action_space.shape[0])
+        self.tanh = torch.nn.Tanh()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.linear1(x)
+        x = self.relu1(x)
+        x = self.linear2(x)
+        x = self.tanh(x)
+        x = x * 2
+        return x
+
+class Critic(torch.nn.Module):
+    def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
+        super().__init__()
+
+        self.linear1 = torch.nn.Linear(env.observation_space.shape[0] + env.action_space.shape[0], args.hidden_layer_size)
+        self.relu1 = torch.nn.ReLU()
+        self.linear2 = torch.nn.Linear(args.hidden_layer_size, 1)
+
+    def forward(self, x: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
+        x = torch.cat([x, a], dim=1)
+        x = self.linear1(x)
+        x = self.relu1(x)
+        x = self.linear2(x)
+        return x
 
 class Network:
     # Use GPU if available.
@@ -46,7 +78,21 @@ class Network:
         #   two more hidden layers, before computing the returns with the last output layer.
         #
         # - a target critic as the copy of the critic using `copy.deepcopy`.
-        raise NotImplementedError()
+        #
+
+        self.actor = Actor(env, args).to(self.device)
+        self.actor.apply(wrappers.torch_init_with_xavier_and_zeros)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=args.learning_rate)
+        self.target_actor = copy.deepcopy(self.actor)
+
+        self.critic = Critic(env, args).to(self.device)
+        self.critic.apply(wrappers.torch_init_with_xavier_and_zeros)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=args.learning_rate)
+        self.critic_loss = torch.nn.MSELoss()
+        self.target_critic = copy.deepcopy(self.critic)
+
+        self.target_tau = args.target_tau
+
 
     # The `wrappers.typed_torch_function` automatically converts input arguments
     # to PyTorch tensors of given type, and converts the result to a NumPy array.
@@ -62,18 +108,46 @@ class Network:
         #   for param, target_param in zip(source.parameters(), target.parameters()):
         #       target_param.data.mul_(1 - target_tau)
         #       target_param.data.add_(target_tau * param.data)
-        raise NotImplementedError()
+
+        self.actor.train()
+        self.critic.train()
+
+        self.actor_optimizer.zero_grad()
+        actions_pred = self.actor(states)
+        actor_loss = -self.critic(states, actions_pred).mean()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
+        self.critic_optimizer.zero_grad()
+        critic_pred = self.critic(states, actions)
+        critic_loss = self.critic_loss(critic_pred, returns).mean()
+        critic_loss.backward()
+        self.critic_optimizer.step()
+
+        for param, target_param in zip(self.actor.parameters(), self.target_actor.parameters()):
+            target_param.data.mul_(1 - self.target_tau)
+            target_param.data.add_(self.target_tau * param.data)
+
+        for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):
+            target_param.data.mul_(1 - self.target_tau)
+            target_param.data.add_(self.target_tau * param.data)
+
 
     @wrappers.typed_torch_function(device, torch.float32)
     def predict_actions(self, states: torch.Tensor) -> np.ndarray:
         # TODO: Return predicted actions by the actor.
-        raise NotImplementedError()
+        with torch.no_grad():
+            actions = self.actor(states)
+            return actions
 
     @wrappers.typed_torch_function(device, torch.float32)
     def predict_values(self, states: torch.Tensor) -> np.ndarray:
         # TODO: Return predicted returns -- predict actions by the target actor
         # and evaluate them using the target critic.
-        raise NotImplementedError()
+        with torch.no_grad():
+            actions = self.target_actor(states)
+            values = self.target_critic(states, actions)
+            return values
 
 
 class OrnsteinUhlenbeckNoise:
@@ -112,7 +186,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         rewards, state, done = 0, env.reset(start_evaluation=start_evaluation, logging=logging)[0], False
         while not done:
             # TODO: Predict the action by calling `network.predict_actions`.
-            action = ...
+            action = network.predict_actions(np.array([state]))[0]
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             rewards += reward
@@ -129,7 +203,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 # TODO: Predict actions by calling `network.predict_actions`
                 # and adding the Ornstein-Uhlenbeck noise. As in paac_continuous,
                 # clip the actions to the `env.action_space.{low,high}` range.
-                action = ...
+                action = network.predict_actions(np.array([state]))[0] + noise.sample()
+                action = np.clip(action, env.action_space.low, env.action_space.high)
 
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
@@ -141,6 +216,11 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 batch = replay_buffer.sample(args.batch_size, np.random)
                 states, actions, rewards, dones, next_states = map(np.array, zip(*batch))
                 # TODO: Perform the training
+
+                rewards = rewards[:,np.newaxis]
+                returns = rewards + args.gamma * network.predict_values(next_states)
+                network.train(states, actions, returns)
+
 
         # Periodic evaluation
         returns = [evaluate_episode(logging=False) for _ in range(args.evaluate_for)]
