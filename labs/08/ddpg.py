@@ -11,7 +11,7 @@ import wrappers
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--env", default="Pendulum-v1", type=str, help="Environment.")
+parser.add_argument("--env", default="InvertedDoublePendulum-v5", type=str, help="Environment.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
@@ -22,10 +22,11 @@ parser.add_argument("--evaluate_each", default=50, type=int, help="Evaluate each
 parser.add_argument("--evaluate_for", default=50, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
+parser.add_argument("--learning_rate_actor", default=1e-4, type=float, help="Learning rate.")
+parser.add_argument("--learning_rate_critic", default=1e-3, type=float, help="Learning rate.")
 parser.add_argument("--noise_sigma", default=0.2, type=float, help="UB noise sigma.")
 parser.add_argument("--noise_theta", default=0.15, type=float, help="UB noise theta.")
-parser.add_argument("--target_tau", default=0.01, type=float, help="Target network update weight.")
+parser.add_argument("--target_tau", default=0.001, type=float, help="Target network update weight.")
 
 
 class Actor(torch.nn.Module):
@@ -91,12 +92,12 @@ class Network:
 
         self.actor = Actor(env, args).to(self.device)
         self.actor.apply(wrappers.torch_init_with_xavier_and_zeros)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=args.learning_rate)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=args.learning_rate_actor)
         self.target_actor = copy.deepcopy(self.actor)
 
         self.critic = Critic(env, args).to(self.device)
         self.critic.apply(wrappers.torch_init_with_xavier_and_zeros)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=args.learning_rate)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=args.learning_rate_critic)
         self.critic_loss = torch.nn.MSELoss()
         self.target_critic = copy.deepcopy(self.critic)
 
