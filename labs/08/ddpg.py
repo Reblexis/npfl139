@@ -25,7 +25,7 @@ parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of h
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 parser.add_argument("--noise_sigma", default=0.2, type=float, help="UB noise sigma.")
 parser.add_argument("--noise_theta", default=0.15, type=float, help="UB noise theta.")
-parser.add_argument("--target_tau", default=0.01, type=float, help="Target network update weight.")
+parser.add_argument("--target_tau", default=0.1, type=float, help="Target network update weight.")
 
 
 class Actor(torch.nn.Module):
