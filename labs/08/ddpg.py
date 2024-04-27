@@ -25,7 +25,7 @@ parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of h
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 parser.add_argument("--noise_sigma", default=0.2, type=float, help="UB noise sigma.")
 parser.add_argument("--noise_theta", default=0.15, type=float, help="UB noise theta.")
-parser.add_argument("--target_tau", default=0.1, type=float, help="Target network update weight.")
+parser.add_argument("--target_tau", default=0.01, type=float, help="Target network update weight.")
 
 
 class Actor(torch.nn.Module):
@@ -34,15 +34,20 @@ class Actor(torch.nn.Module):
 
         self.linear1 = torch.nn.Linear(env.observation_space.shape[0], args.hidden_layer_size)
         self.relu1 = torch.nn.ReLU()
-        self.linear2 = torch.nn.Linear(args.hidden_layer_size, env.action_space.shape[0])
+        self.linear2 = torch.nn.Linear(args.hidden_layer_size, args.hidden_layer_size)
+        self.relu2 = torch.nn.ReLU()
+        self.linear3 = torch.nn.Linear(args.hidden_layer_size, env.action_space.shape[0])
         self.tanh = torch.nn.Tanh()
+        self.scaling_factor = env.action_space.high[0]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.linear1(x)
         x = self.relu1(x)
         x = self.linear2(x)
+        x = self.relu2(x)
+        x = self.linear3(x)
         x = self.tanh(x)
-        x = x * 2
+        x = x * self.scaling_factor
         return x
 
 class Critic(torch.nn.Module):
@@ -51,13 +56,17 @@ class Critic(torch.nn.Module):
 
         self.linear1 = torch.nn.Linear(env.observation_space.shape[0] + env.action_space.shape[0], args.hidden_layer_size)
         self.relu1 = torch.nn.ReLU()
-        self.linear2 = torch.nn.Linear(args.hidden_layer_size, 1)
+        self.linear2 = torch.nn.Linear(args.hidden_layer_size, args.hidden_layer_size)
+        self.relu2 = torch.nn.ReLU()
+        self.linear3 = torch.nn.Linear(args.hidden_layer_size, 1)
 
     def forward(self, x: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         x = torch.cat([x, a], dim=1)
         x = self.linear1(x)
         x = self.relu1(x)
         x = self.linear2(x)
+        x = self.relu2(x)
+        x = self.linear3(x)
         return x
 
 class Network:
@@ -194,6 +203,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     noise = OrnsteinUhlenbeckNoise(env.action_space.shape[0], 0, args.noise_theta, args.noise_sigma)
     training = True
+    env_thresholds = {"Pendulum-v1": -180, "InvertedDoublePendulum-v5" : 9200}
     while training:
         # Training
         for _ in range(args.evaluate_each):
@@ -225,6 +235,9 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # Periodic evaluation
         returns = [evaluate_episode(logging=False) for _ in range(args.evaluate_for)]
         print("Evaluation after episode {}: {:.2f}".format(env.episode, np.mean(returns)))
+
+        if np.mean(returns) > env_thresholds[args.env]:
+            break
 
     # Final evaluation
     while True:
