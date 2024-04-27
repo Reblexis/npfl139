@@ -22,8 +22,8 @@ parser.add_argument("--evaluate_each", default=50, type=int, help="Evaluate each
 parser.add_argument("--evaluate_for", default=50, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate_actor", default=1e-4, type=float, help="Learning rate.")
-parser.add_argument("--learning_rate_critic", default=1e-3, type=float, help="Learning rate.")
+parser.add_argument("--learning_rate_actor", default=1e-3, type=float, help="Learning rate.")
+parser.add_argument("--learning_rate_critic", default=1e-2, type=float, help="Learning rate.")
 parser.add_argument("--noise_sigma", default=0.2, type=float, help="UB noise sigma.")
 parser.add_argument("--noise_theta", default=0.15, type=float, help="UB noise theta.")
 parser.add_argument("--target_tau", default=0.001, type=float, help="Target network update weight.")
@@ -143,6 +143,15 @@ class Network:
             target_param.data.add_(self.target_tau * param.data)
 
 
+    def save_to_cpu(self, name):
+        self.actor.cpu()
+        torch.save(self.actor.state_dict(), f"actor_{name}.pth")
+        self.actor.to(self.device)
+
+    def load_from_cpu(self, name):
+        self.actor.load_state_dict(torch.load(f"actor_{name}.pth"))
+        self.actor.to(self.device)
+
     @wrappers.typed_torch_function(device, torch.float32)
     def predict_actions(self, states: torch.Tensor) -> np.ndarray:
         # TODO: Return predicted actions by the actor.
@@ -238,6 +247,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         print("Evaluation after episode {}: {:.2f}".format(env.episode, np.mean(returns)))
 
         if np.mean(returns) > env_thresholds[args.env]:
+            network.save_to_cpu(args.env)
             break
 
     # Final evaluation
