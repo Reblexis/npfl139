@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import os
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import gymnasium as gym
-import keras
 import numpy as np
-import tensorflow as tf
+import torch
 
 import multi_collect_environment
 import wrappers
@@ -34,72 +32,61 @@ parser.add_argument("--trace_lambda", default=..., type=float, help="Traces fact
 parser.add_argument("--worker_steps", default=..., type=int, help="Steps for each worker to perform.")
 
 
-# TODO: Note that this time we derive the Network directly from `keras.Model`.
-# The reason is that the high-level Keras API is useful in PPO, where we need
-# to train on an unchanging dataset (generated batches, train for several epochs, ...).
-# That means that:
-# - we define training in `train_step` method, which the Keras API automatically uses
-# - we still provide custom `predict` method, because it is fastest this way
-# - loading and saving should be performed using `save_weights` and `load_weights`, so that
-#   the `predict` method and the `Network` type is preserved. The `.weights.h5` suffix
-#   should be used for the weights file path.
-class Network(keras.Model):
+class Network:
+    # Use GPU if available.
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     def __init__(self, observation_space: gym.Space, action_space: gym.Space, args: argparse.Namespace) -> None:
         self._args = args
 
-        # Create a suitable model for the given observation and action spaces.
-        inputs = keras.Input(observation_space.shape)
+        # TODO: Create an actor using a single hidden layer with `args.hidden_layer_size`
+        # units and ReLU activation, produce a policy with `action_space.n` discrete actions.
+        self._actor = ...
 
-        # TODO: Using a single hidden layer with args.hidden_layer_size and ReLU activation,
-        # produce a policy with `action_space.n` discrete actions.
-        policy = ...
+        # TODO: Create a critic (value predictor) consisting of a single hidden layer with
+        # `args.hidden_layer_size` units and ReLU activation, and and output layer with a single output.
+        self._critic = ...
 
-        # TODO: Using an independent single hidden layer with args.hidden_layer_size and ReLU activation,
-        # produce a value function estimate. It is best to generate it as a scalar, not
-        # a vector of length one, to avoid broadcasting errors later.
-        value = ...
+    def save_actor(self, path: str):
+        torch.save(self._actor.state_dict(), path)
 
-        # Construct the model
-        super().__init__(inputs=inputs, outputs=[policy, value])
+    def load_actor(self, path: str):
+        self._actor.load_state_dict(torch.load(path, map_location=self.device))
 
-        # Compile using Adam optimizer with the given learning rate.
-        self.compile(optimizer=keras.optimizers.Adam(args.learning_rate))
+    # The `wrappers.typed_torch_function` automatically converts input arguments
+    # to PyTorch tensors of given type, and converts the result to a NumPy array.
+    @wrappers.typed_torch_function(device, torch.float32, torch.int64, torch.float32, torch.float32, torch.float32)
+    def train(self, states: torch.Tensor, actions: torch.Tensor, action_probs: torch.Tensor,
+              advantages: torch.Tensor, returns: torch.Tensor) -> None:
+        # TODO: Perform a single training step of the PPO algorithm.
+        # For the policy model, the sum is the sum of:
+        # - the PPO loss, where `self._args.clip_epsilon` is used to clip the probability ratio
+        # - the entropy regularization with coefficient `self._args.entropy_regularization`.
+        #   You can compute it for example using the `torch.distributions.Categorical` class.
+        ...
 
-    # TODO: Define a training method `train_step`, which is automatically used by Keras.
-    def train_step(self, data):
-        # Unwrap the data. The targets is a dictionary of several tensors, containing keys
-        # - "actions"
-        # - "action_probs"
-        # - "advantages"
-        # - "returns"
-        states, targets = data
-        with tf.GradientTape() as tape:
-            # Compute the policy and the value function
-            policy, value = self(states, training=True)
+        # TODO: The critic model is trained in a stadard way, by using the MSE
+        # error between the predicted value function and target returns.
+        ...
 
-            # TODO: Sum the following three losses
-            # - the PPO loss, where `self._args.clip_epsilon` is used to clip the probability ratio
-            # - the MSE error between the predicted value function and target returns
-            # - the entropy regularization with coefficient `self._args.entropy_regularization`.
-            #   You can compute it for example using `keras.losses.CategoricalCrossentropy()`
-            #   by realizing that entropy can be computed using cross-entropy.
-            loss = ...
+    @wrappers.typed_torch_function(device, torch.float32)
+    def predict_actions(self, states: torch.Tensor) -> np.ndarray:
+        # TODO: Return predicted action probabilities.
+        raise NotImplementedError()
 
-        # Perform an optimizer step and return the loss for reporting and visualization.
-        self.optimizer.apply(tf.gradients(loss, self.trainable_variables), self.trainable_variables)
-        return {"loss": loss}
-
-    @wrappers.raw_typed_tf_function(tf.float32)
-    def predict(self, states: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        return self(states)
+    @wrappers.typed_torch_function(device, torch.float32)
+    def predict_values(self, states: torch.Tensor) -> np.ndarray:
+        # TODO: Return estimates of value function.
+        raise NotImplementedError()
 
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set random seeds and the number of threads
+    np.random.seed(args.seed)
     if args.seed is not None:
-        keras.utils.set_random_seed(args.seed)
-    tf.config.threading.set_inter_op_parallelism_threads(args.threads)
-    tf.config.threading.set_intra_op_parallelism_threads(args.threads)
+        torch.manual_seed(args.seed)
+    torch.set_num_threads(args.threads)
+    torch.set_num_interop_threads(args.threads)
 
     # Construct the network
     network = Network(env.observation_space, env.action_space, args)
@@ -135,7 +122,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             next_state, reward, terminated, truncated, _ = venv.step(action)
             done = terminated | truncated
 
-            # TODO: Collect the required quantities
+            # TODO: Compute and collect the required quantities
             ...
 
             state = next_state
@@ -146,18 +133,11 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # each worker might have generated multiple episodes, the last one probably unfinished.
         advantages, returns = ...
 
-        # Train using the Keras API.
-        # - The below code assumes that the first two dimensions of the used quantities are
-        #   `[args.worker_steps, args.envs]` and concatenates them together.
-        # - We do not log the training by passing `verbose=0`; feel free to change it.
-        network.fit(
-            np.concatenate(states),
-            {"actions": np.concatenate(actions),
-             "action_probs": np.concatenate(action_probs),
-             "advantages": np.concatenate(advantages),
-             "returns": np.concatenate(returns)},
-            batch_size=args.batch_size, epochs=args.epochs, verbose=0,
-        )
+        # TODO: Train for `args.epochs` using the collected data. In every epoch,
+        # you should randomly sample batches of size `args.batch_size` from the collected data.
+        # A possible approach is to create a dataset of `(states, actions, action_probs, advantages, returns)`
+        # quintuples using a single `torch.utils.data.StackDataset` and then use a dataloader.
+        ...
 
         # Periodic evaluation
         iteration += 1
