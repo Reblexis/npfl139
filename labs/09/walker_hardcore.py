@@ -43,7 +43,9 @@ class Actor(torch.nn.Module):
         self.relu1 = torch.nn.ReLU()
         self.linear2 = torch.nn.Linear(args.hidden_layer_size, args.hidden_layer_size)
         self.relu2 = torch.nn.ReLU()
-        self.linear3 = torch.nn.Linear(args.hidden_layer_size, env.action_space.shape[0])
+        self.linear3 = torch.nn.Linear(args.hidden_layer_size, args.hidden_layer_size)
+        self.relu3 = torch.nn.ReLU()
+        self.linear4 = torch.nn.Linear(args.hidden_layer_size, env.action_space.shape[0])
         self.tanh = torch.nn.Tanh()
         self.scaling_factor = env.action_space.high[0]
 
@@ -53,6 +55,8 @@ class Actor(torch.nn.Module):
         x = self.linear2(x)
         x = self.relu2(x)
         x = self.linear3(x)
+        x = self.relu3(x)
+        x = self.linear4(x)
         x = self.tanh(x)
         x = x * self.scaling_factor
         return x
@@ -65,7 +69,9 @@ class Critic(torch.nn.Module):
         self.relu1 = torch.nn.ReLU()
         self.linear2 = torch.nn.Linear(args.hidden_layer_size, args.hidden_layer_size)
         self.relu2 = torch.nn.ReLU()
-        self.linear3 = torch.nn.Linear(args.hidden_layer_size, 1)
+        self.linear3 = torch.nn.Linear(args.hidden_layer_size, args.hidden_layer_size)
+        self.relu3 = torch.nn.ReLU()
+        self.linear4 = torch.nn.Linear(args.hidden_layer_size, 1)
 
     def forward(self, x: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         x = torch.cat([x, a], dim=1)
@@ -74,6 +80,8 @@ class Critic(torch.nn.Module):
         x = self.linear2(x)
         x = self.relu2(x)
         x = self.linear3(x)
+        x = self.relu3(x)
+        x = self.linear4(x)
         return x
 
 class Network:
@@ -229,6 +237,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             action = network.predict_actions(np.array([state]))[0]
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
+            if reward == -100:
+                reward = 0
             rewards += reward
         return rewards
 
@@ -236,8 +246,11 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     training = not args.recodex
     env_thresholds = {"Pendulum-v1": -180, "InvertedDoublePendulum-v5" : 9200, "BipedalWalker-v3": 210, "BipedalWalkerHardcore-v3": 110}
     episode = 0
-    best = -1000
+    best = 100
     random_value = random.randint(0, 1000000)
+    random_value = 514009
+    wandb.log({"random_value": random_value})
+    network.load_from_cpu(f"{args.env}_{random_value}")
     if USE_WANDB:
         wandb.log({"episode": episode})
     while training:
