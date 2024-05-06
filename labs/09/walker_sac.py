@@ -11,24 +11,28 @@ import wrappers
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--env", default="BipedalWalker-v3", type=str, help="Environment.")
+parser.add_argument("--env", default="InvertedDoublePendulum-v5", type=str, help="Environment.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
+parser.add_argument("--batch_size", default=256, type=int, help="Batch size.")
 parser.add_argument("--envs", default=8, type=int, help="Environments.")
 parser.add_argument("--evaluate_each", default=1000, type=int, help="Evaluate each number of updates.")
 parser.add_argument("--evaluate_for", default=50, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=256, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=1e-4, type=float, help="Learning rate.")
+parser.add_argument("--learning_rate", default=3e-4, type=float, help="Learning rate.")
 parser.add_argument("--model_path", default="walker.model", type=str, help="Model path")
 parser.add_argument("--replay_buffer_size", default=1000000, type=int, help="Replay buffer size")
 parser.add_argument("--target_entropy", default=-1, type=float, help="Target entropy per action component.")
 parser.add_argument("--target_tau", default=5e-3, type=float, help="Target network update weight.")
 
+USE_WANDB = True
+
+if USE_WANDB:
+    import wandb
 
 class Network:
     # Use GPU if available.
@@ -54,6 +58,8 @@ class Network:
 
                 # Then, create a variable representing a logarithm of alpha, using for example the following:
                 self._log_alpha = torch.nn.Parameter(torch.tensor(np.log(0.1), dtype=torch.float32))
+                if USE_WANDB:
+                    wandb.log({"log_alpha": self._log_alpha.item()})
 
                 # Finally, create two tensors representing the action scale and offset.
                 self.register_buffer("action_scale", torch.as_tensor((env.action_space.high - env.action_space.low) / 2))
@@ -114,8 +120,9 @@ class Network:
                 else:
                     actions = torch.tanh(mus) * self.action_scale + self.action_offset
 
-                log_prob = final_distribution.log_prob(actions).mean(dim=-1)
-                alpha = torch.exp(self._log_alpha)
+                log_prob = final_distribution.log_prob(actions).mean(dim=-1, keepdim=True)
+                #alpha = torch.exp(self._log_alpha)
+                alpha = torch.tensor(0.1)
                 return actions, log_prob, alpha
 
 
@@ -149,7 +156,8 @@ class Network:
                 return self.layer3(x)
 
         self.critic1 = Critic(args.hidden_layer_size).apply(wrappers.torch_init_with_xavier_and_zeros).to(self.device)
-        self.critic2 = copy.deepcopy(self.critic1).apply(wrappers.torch_init_with_xavier_and_zeros)
+        self.critic2 = copy.deepcopy(self.critic1)
+        self.critic2.apply(wrappers.torch_init_with_xavier_and_zeros)
         self.target_critic1 = copy.deepcopy(self.critic1)
         self.target_critic2 = copy.deepcopy(self.critic2)
 
@@ -197,11 +205,11 @@ class Network:
         actor_actions, log_prob, alpha = self._actor(states, sample=True)
         critic_values = torch.min(self.critic1(states, actor_actions), self.critic2(states, actor_actions))
 
-        actor_loss = (alpha.detach() * log_prob - critic_values).mean()
+        actor_loss = -(critic_values - alpha.detach() * log_prob).mean()
         actor_loss.backward()
 
-        alpha_loss = (alpha * (-self.target_entropy - log_prob.detach())).mean()
-        alpha_loss.backward()
+        alpha_loss = (alpha * (-log_prob-self.target_entropy).detach()).mean()
+        #alpha_loss.backward()
 
         self.critic1.zero_grad()
         self.critic2.zero_grad()
@@ -211,6 +219,9 @@ class Network:
         critic2_loss.backward()
 
         self._optimizer.step()
+        if USE_WANDB:
+            wandb.log({"actor_loss": actor_loss.item(), "alpha_loss": alpha_loss.item(), "critic1_loss": critic1_loss.item(), "critic2_loss": critic2_loss.item()})
+            wandb.log({"log_alpha": self._actor._log_alpha.item()})
 
         self.update_parameters_by_ema(self.critic1, self.target_critic1, args.target_tau)
         self.update_parameters_by_ema(self.critic2, self.target_critic2, args.target_tau)
@@ -240,7 +251,7 @@ class Network:
             critic1_values = self.target_critic1(states, actions)
             critic2_values = self.target_critic2(states, actions)
             critic_values = torch.min(critic1_values, critic2_values)
-            return critic_values - alpha * log_prob[:, np.newaxis]
+            return critic_values - alpha * log_prob
 
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
@@ -260,6 +271,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             # TODO: Predict the action using the greedy policy.
             action = network.predict_mean_actions(np.array([state]))[0]
             state, reward, terminated, truncated, _ = env.step(action)
+            if reward == -100:
+                reward = 0
             done = terminated or truncated
             rewards += reward
         return rewards
@@ -279,12 +292,17 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     state = venv.reset(seed=args.seed)[0]
     training, autoreset = True, np.zeros(args.envs, dtype=bool)
+    steps = 0
+    if USE_WANDB:
+        wandb.log({"steps": steps})
+
     while training:
         for _ in range(args.evaluate_each):
             # Predict actions by calling `network.predict_sampled_actions`.
             action = network.predict_sampled_actions(state)
 
             next_state, reward, terminated, truncated, _ = venv.step(action)
+            reward = np.where(reward == -100, 0, reward)
             done = terminated | truncated
             for i in range(args.envs):
                 if not autoreset[i]:
@@ -300,11 +318,25 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 # TODO: Perform the training
 
                 values = network.predict_values(states)
-                returns = (rewards + args.gamma * (1 - dones))[:, np.newaxis] * values
+                average_value = np.mean(values)
+                if USE_WANDB:
+                    wandb.log({"average_value": average_value})
+
+                mask = ~dones[:, np.newaxis]
+                returns = rewards[:, np.newaxis] + args.gamma * mask * values
                 network.train(states, actions, returns)
+
+            steps += args.envs
+            if USE_WANDB:
+                wandb.log({"steps": steps})
 
         # Periodic evaluation
         returns = [evaluate_episode() for _ in range(args.evaluate_for)]
+        wandb.log({"return": np.mean(returns)})
+
+        if np.mean(returns) > 2100:
+            training = False
+            network.save_actor(args.model_path)
 
     # Final evaluation
     while True:
@@ -313,6 +345,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     args = parser.parse_args([] if "__file__" not in globals() else None)
+
+    if USE_WANDB:
+        wandb.init(project=args.env)
+        wandb.config.update(args)
 
     # Create the environment
     env = wrappers.EvaluationEnv(gym.make(args.env), args.seed, args.render_each)
