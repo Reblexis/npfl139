@@ -160,6 +160,8 @@ class Network:
         # Create MSE loss.
         self._mse_loss = torch.nn.MSELoss()
 
+        self.target_entropy = args.target_entropy * env.action_space.shape[0]
+
     # Method for performing exponential moving average of weights of the given two modules.
     def update_parameters_by_ema(self, source: torch.nn.Module, target: torch.nn.Module, tau: float) -> None:
         with torch.no_grad():
@@ -198,7 +200,7 @@ class Network:
         actor_loss = (alpha.detach() * log_prob - critic_values).mean()
         actor_loss.backward()
 
-        alpha_loss = (alpha * (-args.target_entropy - log_prob.detach())).mean()
+        alpha_loss = (alpha * (-self.target_entropy - log_prob.detach())).mean()
         alpha_loss.backward()
 
         self.critic1.zero_grad()
@@ -209,6 +211,9 @@ class Network:
         critic2_loss.backward()
 
         self._optimizer.step()
+
+        self.update_parameters_by_ema(self.critic1, self.target_critic1, args.target_tau)
+        self.update_parameters_by_ema(self.critic2, self.target_critic2, args.target_tau)
 
     # Predict actions without sampling.
     @wrappers.typed_torch_function(device, torch.float32)
