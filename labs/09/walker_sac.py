@@ -283,8 +283,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             # TODO: Predict the action using the greedy policy.
             action = network.predict_mean_actions(np.array([state]))[0]
             state, reward, terminated, truncated, _ = env.step(action)
-            if reward == -100:
-                reward = 0
             done = terminated or truncated
             rewards += reward
         return rewards
@@ -317,7 +315,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             action = network.predict_sampled_actions(state)
 
             next_state, reward, terminated, truncated, _ = venv.step(action)
-            reward = np.where(reward == -100, 0, reward)
             done = terminated | truncated
             for i in range(args.envs):
                 if not autoreset[i]:
