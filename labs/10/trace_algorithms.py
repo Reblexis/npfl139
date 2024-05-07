@@ -9,10 +9,10 @@ import wrappers
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--alpha", default=0.1, type=float, help="Learning rate alpha.")
-parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--episodes", default=50, type=int, help="Training episodes.")
 parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration epsilon factor.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor gamma.")
-parser.add_argument("--n", default=1, type=int, help="Use n-step method.")
+parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
 parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy (less exploratory target)")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
@@ -65,14 +65,31 @@ def main(args: argparse.Namespace) -> np.ndarray:
     for _ in range(args.episodes):
         state, done = env.reset()[0], False
 
-        # Generate episode and update V using the given TD method
-        while not done:
-            best_action = argmax_with_tolerance(R[state] + (1 - D[state]) * args.gamma * V[N[state]])
-            action = best_action if generator.uniform() >= args.epsilon else env.action_space.sample()
-            action_prob = args.epsilon / env.action_space.n + (1 - args.epsilon) * (action == best_action)
+        t = 0
+        T = 9999999999999999
+        tau = -1
+        states, next_states, actions, action_probs, rewards, dones = [], [], [], [], [], []
 
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
+        # Generate episode and update V using the given TD method
+        while tau < T-1:
+            if t < T:
+                best_action = argmax_with_tolerance(R[state] + (1 - D[state]) * args.gamma * V[N[state]])
+                action = best_action if generator.uniform() >= args.epsilon else env.action_space.sample()
+                action_prob = args.epsilon / env.action_space.n + (1 - args.epsilon) * (action == best_action)
+
+                next_state, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                if done:
+                    T = t + 1
+
+                states.append(state)
+                next_states.append(next_state)
+                actions.append(action)
+                action_probs.append(action_prob)
+                rewards.append(reward)
+                dones.append(done)
+
+            tau = t - args.n + 1
 
             # TODO: Perform the update to the state value function `V`, using
             # a TD update with the following parameters:
@@ -102,6 +119,21 @@ def main(args: argparse.Namespace) -> np.ndarray:
             # and during these updates, use the `compute_target_policy(V)` with
             # the up-to-date value of `V`.
 
+            if tau >= 0:
+                G = 0
+                G += V[state]
+                current_gamma = 1
+                for i in range(min(args.n, T-tau)):
+                    cur_state = states[tau+i]
+                    cur_reward = rewards[tau+i]
+                    cur_done = dones[tau+i]
+                    cur_next_state = next_states[tau+i]
+                    dt = (cur_reward + (1-cur_done) * args.gamma * V[cur_next_state] - V[cur_state])
+                    G += current_gamma * dt
+                    current_gamma *= args.gamma
+                V[state] = V[state] + args.alpha * (G - V[state])
+
+            t+= 1
             state = next_state
 
     return V
