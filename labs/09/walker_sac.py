@@ -289,7 +289,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     # Evaluation in ReCodEx
     if args.recodex:
-        network.load_actor(args.model_path)
+        random_value = 447431
+        network.load_actor(f"{args.env}_{random_value}")
         while True:
             evaluate_episode(True)
 
@@ -307,7 +308,9 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         wandb.log({"steps": steps})
 
     random_value = random.randint(0, 1000000)
+    wandb.log({"random_value": random_value})
     env_thresholds = {"Pendulum-v1": -180, "InvertedDoublePendulum-v5" : 9200, "BipedalWalker-v3": 210, "BipedalWalkerHardcore-v3": 110}
+
     best = 0
     while training:
         for _ in range(args.evaluate_each):
