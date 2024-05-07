@@ -11,7 +11,7 @@ import wrappers
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--env", default="InvertedDoublePendulum-v5", type=str, help="Environment.")
+parser.add_argument("--env", default="BipedalWalker-v3", type=str, help="Environment.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
@@ -20,7 +20,7 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--batch_size", default=256, type=int, help="Batch size.")
 parser.add_argument("--envs", default=8, type=int, help="Environments.")
 parser.add_argument("--evaluate_each", default=1000, type=int, help="Evaluate each number of updates.")
-parser.add_argument("--evaluate_for", default=50, type=int, help="Evaluate the given number of episodes.")
+parser.add_argument("--evaluate_for", default=20, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=256, type=int, help="Size of hidden layer.")
 parser.add_argument("--learning_rate", default=3e-4, type=float, help="Learning rate.")
@@ -53,6 +53,8 @@ class Network:
                 self.relu1 = torch.nn.ReLU()
                 self.layer2 = torch.nn.Linear(hidden_layer_size, hidden_layer_size)
                 self.relu2 = torch.nn.ReLU()
+                self.layer3 = torch.nn.Linear(hidden_layer_size, hidden_layer_size)
+                self.relu3 = torch.nn.ReLU()
                 self.mean_layer = torch.nn.Linear(hidden_layer_size, env.action_space.shape[0])
                 self.sds_layer = torch.nn.Linear(hidden_layer_size, env.action_space.shape[0])
 
@@ -105,6 +107,7 @@ class Network:
 
                 x = self.relu1(self.layer1(inputs))
                 x = self.relu2(self.layer2(x))
+                x = self.relu3(self.layer3(x))
                 mus = self.mean_layer(x)
                 sds = torch.exp(self.sds_layer(x))
 
@@ -147,12 +150,16 @@ class Network:
                 self.relu1 = torch.nn.ReLU()
                 self.layer2 = torch.nn.Linear(hidden_layer_size, hidden_layer_size)
                 self.relu2 = torch.nn.ReLU()
-                self.layer3 = torch.nn.Linear(hidden_layer_size, 1)
+                self.layer3 = torch.nn.Linear(hidden_layer_size, hidden_layer_size)
+                self.relu3 = torch.nn.ReLU()
+
+                self.critic = torch.nn.Linear(hidden_layer_size, 1)
 
             def forward(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
                 x = torch.cat([states, actions], dim=-1)
                 x = self.relu1(self.layer1(x))
                 x = self.relu2(self.layer2(x))
+                x = self.relu3(self.layer3(x))
                 return self.layer3(x)
 
         self.critic1 = Critic(args.hidden_layer_size).apply(wrappers.torch_init_with_xavier_and_zeros).to(self.device)
@@ -205,7 +212,7 @@ class Network:
         actor_actions, log_prob, alpha = self._actor(states, sample=True)
         critic_values = torch.min(self.critic1(states, actor_actions), self.critic2(states, actor_actions))
 
-        actor_loss = -(critic_values - alpha.detach() * log_prob).mean()
+        actor_loss = ((alpha.detach() * log_prob)-critic_values).mean()
         actor_loss.backward()
 
         alpha_loss = (alpha * (-log_prob-self.target_entropy).detach()).mean()
@@ -273,6 +280,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             state, reward, terminated, truncated, _ = env.step(action)
             if reward == -100:
                 reward = 0
+            reward /= 100
             done = terminated or truncated
             rewards += reward
         return rewards
@@ -303,6 +311,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
             next_state, reward, terminated, truncated, _ = venv.step(action)
             reward = np.where(reward == -100, 0, reward)
+            reward/=100
             done = terminated | truncated
             for i in range(args.envs):
                 if not autoreset[i]:
@@ -317,7 +326,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 states, actions, rewards, dones, next_states = map(np.array, zip(*batch))
                 # TODO: Perform the training
 
-                values = network.predict_values(states)
+                values = network.predict_values(next_states)
                 average_value = np.mean(values)
                 if USE_WANDB:
                     wandb.log({"average_value": average_value})
@@ -332,6 +341,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
         # Periodic evaluation
         returns = [evaluate_episode() for _ in range(args.evaluate_for)]
+        print(f"Return after {steps} steps: {np.mean(returns)}")
         wandb.log({"return": np.mean(returns)})
 
         if np.mean(returns) > 2100:

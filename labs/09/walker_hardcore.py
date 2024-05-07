@@ -13,7 +13,7 @@ import wrappers
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--env", default="BipedalWalkerHardcore-v3", type=str, help="Environment.")
+parser.add_argument("--env", default="BipedalWalker-v3", type=str, help="Environment.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
@@ -250,7 +250,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     random_value = random.randint(0, 1000000)
     random_value = 514009
     wandb.log({"random_value": random_value})
-    network.load_from_cpu(f"{args.env}_{random_value}")
+   # network.load_from_cpu(f"{args.env}_{random_value}")
     if USE_WANDB:
         wandb.log({"episode": episode})
     while training:
@@ -280,7 +280,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 # TODO: Perform the training
 
                 rewards = rewards[:,np.newaxis]
-                returns = rewards + args.gamma * network.predict_values(next_states)
+                returns = rewards + args.gamma * (~dones)[:, np.newaxis]*network.predict_values(next_states)
                 network.train(states, actions, returns)
 
             episode += 1
@@ -302,10 +302,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             if USE_WANDB:
                 wandb.log({"best": best})
             network.save_to_cpu(f"{args.env}_{random_value}")
-
-        if np.mean(returns)<best-5:
-            print("Restarting training")
-            network.load_from_cpu(f"{args.env}_{random_value}")
 
     network.load_from_cpu(args.env)
     # Final evaluation
