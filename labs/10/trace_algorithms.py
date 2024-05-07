@@ -9,10 +9,10 @@ import wrappers
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--alpha", default=0.1, type=float, help="Learning rate alpha.")
-parser.add_argument("--episodes", default=50, type=int, help="Training episodes.")
+parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration epsilon factor.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor gamma.")
-parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
+parser.add_argument("--n", default=1, type=int, help="Use n-step method.")
 parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy (less exploratory target)")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
@@ -121,17 +121,28 @@ def main(args: argparse.Namespace) -> np.ndarray:
 
             if tau >= 0:
                 G = 0
-                G += V[state]
+                G += V[states[tau]]
                 current_gamma = 1
+                current_lambda = 1
+                current_rho = 1
+                target_policy = compute_target_policy(V)
                 for i in range(min(args.n, T-tau)):
+                    importance_sampling = target_policy[states[tau+i]][actions[tau+i]] / action_probs[tau+i]
+                    if args.vtrace_clip:
+                        importance_sampling = min(args.vtrace_clip, importance_sampling)
+                    current_rho *= importance_sampling
                     cur_state = states[tau+i]
                     cur_reward = rewards[tau+i]
                     cur_done = dones[tau+i]
                     cur_next_state = next_states[tau+i]
                     dt = (cur_reward + (1-cur_done) * args.gamma * V[cur_next_state] - V[cur_state])
-                    G += current_gamma * dt
+                    G += current_gamma * current_lambda * current_rho * dt
                     current_gamma *= args.gamma
-                V[state] = V[state] + args.alpha * (G - V[state])
+                    if args.trace_lambda:
+                        current_lambda *= args.trace_lambda
+
+
+                V[states[tau]] += args.alpha * (G - V[states[tau]])
 
             t+= 1
             state = next_state
