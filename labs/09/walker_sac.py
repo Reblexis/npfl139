@@ -30,7 +30,7 @@ parser.add_argument("--replay_buffer_size", default=1000000, type=int, help="Rep
 parser.add_argument("--target_entropy", default=-1, type=float, help="Target entropy per action component.")
 parser.add_argument("--target_tau", default=5e-3, type=float, help="Target network update weight.")
 parser.add_argument("--default_alpha", default=0.2, type=float, help="Default alpha.")
-parser.add_argument("--autotune_alpha", default=True, action="store_true", help="Autotune alpha.")
+parser.add_argument("--autotune_alpha", default=False, action="store_true", help="Autotune alpha.")
 
 USE_WANDB = True
 
@@ -315,6 +315,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             action = network.predict_sampled_actions(state)
 
             next_state, reward, terminated, truncated, _ = venv.step(action)
+            reward = np.where(reward==-100, 0, reward)
             done = terminated | truncated
             for i in range(args.envs):
                 if not autoreset[i]:
