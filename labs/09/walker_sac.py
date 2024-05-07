@@ -2,6 +2,7 @@
 import argparse
 import collections
 import copy
+import random
 
 import gymnasium as gym
 import numpy as np
@@ -307,6 +308,9 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     if USE_WANDB:
         wandb.log({"steps": steps})
 
+    random_value = random.randint(0, 1000000)
+    env_thresholds = {"Pendulum-v1": -180, "InvertedDoublePendulum-v5" : 9200, "BipedalWalker-v3": 210, "BipedalWalkerHardcore-v3": 110}
+    best = 0
     while training:
         for _ in range(args.evaluate_each):
             # Predict actions by calling `network.predict_sampled_actions`.
@@ -346,9 +350,12 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         print(f"Return after {steps} steps: {np.mean(returns)}")
         wandb.log({"return": np.mean(returns)})
 
-        if np.mean(returns) > 2100:
-            training = False
-            network.save_actor(args.model_path)
+        if np.mean(returns) > best:
+            best = np.mean(returns)
+            print(f"Best so far: {best}")
+            if USE_WANDB:
+                wandb.log({"best": best})
+            network.save_actor(f"{args.env}_{random_value}")
 
     # Final evaluation
     while True:
