@@ -130,7 +130,9 @@ def main(args: argparse.Namespace) -> np.ndarray:
                     importance_sampling = target_policy[states[tau+i]][actions[tau+i]] / action_probs[tau+i]
                     if args.vtrace_clip:
                         importance_sampling = min(args.vtrace_clip, importance_sampling)
-                    current_rho *= importance_sampling
+
+                    if args.off_policy:
+                        current_rho *= importance_sampling
                     cur_state = states[tau+i]
                     cur_reward = rewards[tau+i]
                     cur_done = dones[tau+i]
