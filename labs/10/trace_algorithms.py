@@ -9,7 +9,7 @@ import wrappers
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--alpha", default=0.1, type=float, help="Learning rate alpha.")
-parser.add_argument("--episodes", default=50, type=int, help="Training episodes.")
+parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration epsilon factor.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor gamma.")
 parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
@@ -121,6 +121,7 @@ def main(args: argparse.Namespace) -> np.ndarray:
 
             if tau >= 0:
                 G = 0
+                G2 = 0
                 G += V[state]
                 current_gamma = 1
                 for i in range(min(args.n, T-tau)):
@@ -128,9 +129,13 @@ def main(args: argparse.Namespace) -> np.ndarray:
                     cur_reward = rewards[tau+i]
                     cur_done = dones[tau+i]
                     cur_next_state = next_states[tau+i]
+                    G2 += current_gamma * cur_reward
                     dt = (cur_reward + (1-cur_done) * args.gamma * V[cur_next_state] - V[cur_state])
                     G += current_gamma * dt
                     current_gamma *= args.gamma
+
+                if args.n <= T-tau:
+                    G2 += current_gamma * V[tau+ args.n]
                 V[state] = V[state] + args.alpha * (G - V[state])
 
             t+= 1
