@@ -28,6 +28,8 @@ parser.add_argument("--model_path", default="walker.model", type=str, help="Mode
 parser.add_argument("--replay_buffer_size", default=1000000, type=int, help="Replay buffer size")
 parser.add_argument("--target_entropy", default=-1, type=float, help="Target entropy per action component.")
 parser.add_argument("--target_tau", default=5e-3, type=float, help="Target network update weight.")
+parser.add_argument("--default_alpha", default=0.2, type=float, help="Default alpha.")
+parser.add_argument("--autotune_alpha", default=True, action="store_true", help="Autotune alpha.")
 
 USE_WANDB = True
 
@@ -59,13 +61,15 @@ class Network:
                 self.sds_layer = torch.nn.Linear(hidden_layer_size, env.action_space.shape[0])
 
                 # Then, create a variable representing a logarithm of alpha, using for example the following:
-                self._log_alpha = torch.nn.Parameter(torch.tensor(np.log(0.1), dtype=torch.float32))
+                self._log_alpha = torch.nn.Parameter(torch.tensor(np.log(args.default_alpha), dtype=torch.float32))
                 if USE_WANDB:
                     wandb.log({"log_alpha": self._log_alpha.item()})
 
                 # Finally, create two tensors representing the action scale and offset.
                 self.register_buffer("action_scale", torch.as_tensor((env.action_space.high - env.action_space.low) / 2))
                 self.register_buffer("action_offset", torch.as_tensor((env.action_space.high + env.action_space.low) / 2))
+
+                self.tune_alpha = args.autotune_alpha
 
             def forward(self, inputs: torch.Tensor, sample: bool):
                 # TODO: Perform the actor computation
@@ -124,8 +128,7 @@ class Network:
                     actions = torch.tanh(mus) * self.action_scale + self.action_offset
 
                 log_prob = final_distribution.log_prob(actions).mean(dim=-1, keepdim=True)
-                #alpha = torch.exp(self._log_alpha)
-                alpha = torch.tensor(0.1)
+                alpha = torch.exp(self._log_alpha)
                 return actions, log_prob, alpha
 
 
@@ -215,8 +218,9 @@ class Network:
         actor_loss = ((alpha.detach() * log_prob)-critic_values).mean()
         actor_loss.backward()
 
-        alpha_loss = (alpha * (-log_prob-self.target_entropy).detach()).mean()
-        #alpha_loss.backward()
+        alpha_loss = (alpha * (-log_prob - self.target_entropy).detach()).mean()
+        if self._actor.tune_alpha:
+            alpha_loss.backward()
 
         self.critic1.zero_grad()
         self.critic2.zero_grad()
@@ -280,7 +284,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             state, reward, terminated, truncated, _ = env.step(action)
             if reward == -100:
                 reward = 0
-            reward /= 100
             done = terminated or truncated
             rewards += reward
         return rewards
@@ -311,7 +314,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
             next_state, reward, terminated, truncated, _ = venv.step(action)
             reward = np.where(reward == -100, 0, reward)
-            reward/=100
             done = terminated | truncated
             for i in range(args.envs):
                 if not autoreset[i]:
