@@ -52,12 +52,18 @@ class Network(keras.Model):
 
         # TODO: Using a single hidden layer with args.hidden_layer_size and ReLU activation,
         # produce a policy with `action_space.n` discrete actions.
-        policy = ...
+        policy = keras.models.Sequential([
+            keras.layers.Dense(args.hidden_layer_size, activation="relu"),
+            keras.layers.Dense(action_space.n, activation="softmax"),
+        ])(inputs)
 
         # TODO: Using an independent single hidden layer with args.hidden_layer_size and ReLU activation,
         # produce a value function estimate. It is best to generate it as a scalar, not
         # a vector of length one, to avoid broadcasting errors later.
-        value = ...
+        value = keras.models.Sequential([
+            keras.layers.Dense(args.hidden_layer_size, activation="relu"),
+            keras.layers.Dense(1),
+        ])(inputs)
 
         # Construct the model
         super().__init__(inputs=inputs, outputs=[policy, value])
@@ -83,7 +89,12 @@ class Network(keras.Model):
             # - the entropy regularization with coefficient `self._args.entropy_regularization`.
             #   You can compute it for example using `keras.losses.CategoricalCrossentropy()`
             #   by realizing that entropy can be computed using cross-entropy.
-            loss = ...
+            actions = targets["actions"]
+            action_probs = targets["action_probs"]
+            advantages = targets["advantages"]
+            returns = targets["returns"]
+
+            loss =
 
         # Perform an optimizer step and return the loss for reporting and visualization.
         self.optimizer.apply(tf.gradients(loss, self.trainable_variables), self.trainable_variables)

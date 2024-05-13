@@ -18,18 +18,18 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
-parser.add_argument("--clip_epsilon", default=..., type=float, help="Clipping epsilon.")
-parser.add_argument("--entropy_regularization", default=0.1, type=float, help="Entropy regularization weight.")
-parser.add_argument("--envs", default=..., type=int, help="Workers during experience collection.")
-parser.add_argument("--epochs", default=..., type=int, help="Epochs to train each iteration.")
-parser.add_argument("--evaluate_each", default=10, type=int, help="Evaluate each given number of iterations.")
-parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
-parser.add_argument("--gamma", default=..., type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=50, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
-parser.add_argument("--trace_lambda", default=..., type=float, help="Traces factor lambda.")
-parser.add_argument("--worker_steps", default=..., type=int, help="Steps for each worker to perform.")
+parser.add_argument("--batch_size", default=256, type=int, help="Batch size.")
+parser.add_argument("--clip_epsilon", default=0.25, type=float, help="Clipping epsilon.")
+parser.add_argument("--entropy_regularization", default=1e-1, type=float, help="Entropy regularization weight.")
+parser.add_argument("--envs", default=8, type=int, help="Workers during experience collection.")
+parser.add_argument("--epochs", default=7, type=int, help="Epochs to train each iteration.")
+parser.add_argument("--evaluate_each", default=1, type=int, help="Evaluate each given number of iterations.")
+parser.add_argument("--evaluate_for", default=100, type=int, help="Evaluate the given number of episodes.")
+parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
+parser.add_argument("--hidden_layer_size", default=256, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=1e-4, type=float, help="Learning rate.")
+parser.add_argument("--trace_lambda", default=0.9, type=float, help="Traces factor lambda.")
+parser.add_argument("--worker_steps", default=10000, type=int, help="Steps for each worker to perform.")
 
 
 class Network:
@@ -41,11 +41,23 @@ class Network:
 
         # TODO: Create an actor using a single hidden layer with `args.hidden_layer_size`
         # units and ReLU activation, produce a policy with `action_space.n` discrete actions.
-        self._actor = ...
+        self._actor = torch.nn.Sequential(
+            torch.nn.Linear(np.prod(observation_space.shape), args.hidden_layer_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(args.hidden_layer_size, action_space.n),
+            torch.nn.Softmax(dim=-1)
+        ).to(self.device)
 
         # TODO: Create a critic (value predictor) consisting of a single hidden layer with
         # `args.hidden_layer_size` units and ReLU activation, and and output layer with a single output.
-        self._critic = ...
+        self._critic = torch.nn.Sequential(
+            torch.nn.Linear(np.prod(observation_space.shape), args.hidden_layer_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(args.hidden_layer_size, 1)
+        ).to(self.device)
+
+        self._actor_optimizer = torch.optim.Adam(self._actor.parameters(), lr=args.learning_rate)
+        self._critic_optimizer = torch.optim.Adam(self._critic.parameters(), lr=args.learning_rate)
 
     def save_actor(self, path: str):
         torch.save(self._actor.state_dict(), path)
@@ -63,21 +75,43 @@ class Network:
         # - the PPO loss, where `self._args.clip_epsilon` is used to clip the probability ratio
         # - the entropy regularization with coefficient `self._args.entropy_regularization`.
         #   You can compute it for example using the `torch.distributions.Categorical` class.
-        ...
+        actor_predictions = self._actor(states)
+        critic_predictions = self._critic(states)
+
+        ratio = actor_predictions[torch.arange(len(actor_predictions)), actions] / action_probs
+        clipped_ratio = torch.clamp(ratio, 1 - self._args.clip_epsilon, 1 + self._args.clip_epsilon)
+        ppo_loss = -torch.min(ratio * advantages, clipped_ratio * advantages).mean()
+
+        entropy = torch.distributions.Categorical(actor_predictions).entropy().mean()
+        entropy_loss = -self._args.entropy_regularization * entropy
+
+        actor_loss = ppo_loss + entropy_loss
 
         # TODO: The critic model is trained in a stadard way, by using the MSE
         # error between the predicted value function and target returns.
-        ...
+
+        critic_loss = torch.nn.functional.mse_loss(critic_predictions.squeeze(), returns.squeeze())
+
+        # Perform the optimization step
+        self._actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self._actor_optimizer.step()
+
+        self._critic_optimizer.zero_grad()
+        critic_loss.backward()
+        self._critic_optimizer.step()
 
     @wrappers.typed_torch_function(device, torch.float32)
     def predict_actions(self, states: torch.Tensor) -> np.ndarray:
         # TODO: Return predicted action probabilities.
-        raise NotImplementedError()
+        with torch.no_grad():
+            return self._actor(states)
 
     @wrappers.typed_torch_function(device, torch.float32)
     def predict_values(self, states: torch.Tensor) -> np.ndarray:
         # TODO: Return estimates of value function.
-        raise NotImplementedError()
+        with torch.no_grad():
+            return self._critic(states)
 
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
@@ -95,7 +129,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         rewards, state, done = 0, env.reset(start_evaluation=start_evaluation, logging=logging)[0], False
         while not done:
             # TODO: Predict the action using the greedy policy
-            action = ...
+            action = np.argmax(network.predict_actions(np.array([state])))
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             rewards += reward
@@ -105,44 +139,90 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     venv = gym.make_vec(env.spec.id, args.envs, gym.VectorizeMode.ASYNC)
 
     # Training
-    state = venv.reset(seed=args.seed)[0]
+    state, autoreset = venv.reset(seed=args.seed)[0], np.zeros(args.envs, dtype=bool)
     training = True
     iteration = 0
     while training:
         # Collect experience. Notably, we collect the following quantities
         # as tensors with the first two dimensions `[args.worker_steps, args.envs]`.
         states, actions, action_probs, rewards, dones, values = [], [], [], [], [], []
+        values.append(network.predict_values(state))
         for _ in range(args.worker_steps):
             # TODO: Choose `action`, which is a vector of `args.envs` actions, each
             # sampled from the corresponding policy generated by the `network.predict`
             # executed on the vector `state`.
-            action = ...
+            probs = network.predict_actions(state)
+            action = np.array([np.random.choice(env.action_space.n, p=probs[i]) for i in range(len(probs))])
 
             # Perform the step
             next_state, reward, terminated, truncated, _ = venv.step(action)
             done = terminated | truncated
 
-            # TODO: Compute and collect the required quantities
-            ...
 
+            # TODO: Compute and collect the required quantities
+            states.append(state)
+            actions.append(action)
+            action_probs.append(probs[range(len(probs)), action])
+            rewards.append(reward)
+            dones.append(done)
+            values.append(network.predict_values(next_state))
+
+            autoreset = done
             state = next_state
 
         # TODO: Estimate `advantages` and `returns` (they differ only by the value function estimate)
         # using lambda-return with coefficients `args.trace_lambda` and `args.gamma`.
         # You need to process episodes of individual workers independently, and note that
         # each worker might have generated multiple episodes, the last one probably unfinished.
-        advantages, returns = ...
+        advantages, returns = [], []
+        for i in range(args.envs):
+            advantage, ret = [], []
+            g = 0
+            for t in range(len(states)-1, -1, -1):
+                if dones[t][i]:
+                    g = 0
+                td_error = rewards[t][i] + (1 - dones[t][i]) * args.gamma * values[t+1][i] - values[t][i]
+                g = td_error + args.gamma * args.trace_lambda * g
+                advantage.append(g)
+                ret.append(g + values[t][i])
+            advantages.append(advantage[::-1])
+            returns.append(ret[::-1])
 
         # TODO: Train for `args.epochs` using the collected data. In every epoch,
         # you should randomly sample batches of size `args.batch_size` from the collected data.
         # A possible approach is to create a dataset of `(states, actions, action_probs, advantages, returns)`
         # quintuples using a single `torch.utils.data.StackDataset` and then use a dataloader.
-        ...
+        dataset = torch.utils.data.TensorDataset(
+            torch.tensor(np.concatenate(states), dtype=torch.float32),
+            torch.tensor(np.concatenate(actions), dtype=torch.int64),
+            torch.tensor(np.concatenate(action_probs), dtype=torch.float32),
+            torch.tensor(np.concatenate(np.array(advantages)), dtype=torch.float32),
+            torch.tensor(np.concatenate(np.array(returns)), dtype=torch.float32),
+        )
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+
+        states_concat = np.concatenate(states)
+        actions_concat = np.concatenate(actions)
+        action_probs_concat = np.concatenate(action_probs)
+        advantages_concat = np.concatenate(np.array(advantages))
+        returns_concat = np.concatenate(np.array(returns))
+
+
+        for epoch in range(args.epochs):
+            random_idx_batch = np.random.choice(len(states_concat), args.batch_size)
+            states_batch = states_concat[random_idx_batch]
+            actions_batch = actions_concat[random_idx_batch]
+            action_probs_batch = action_probs_concat[random_idx_batch]
+            advantages_batch = advantages_concat[random_idx_batch]
+            returns_batch = returns_concat[random_idx_batch]
+
+            network.train(states_batch, actions_batch, action_probs_batch, advantages_batch, returns_batch)
 
         # Periodic evaluation
         iteration += 1
         if iteration % args.evaluate_each == 0:
             returns = [evaluate_episode() for _ in range(args.evaluate_for)]
+            print(f"Iteration {iteration}, average return {np.mean(returns)}")
 
     # Final evaluation
     while True:
