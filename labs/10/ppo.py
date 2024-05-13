@@ -8,6 +8,7 @@ import torch
 
 import multi_collect_environment
 import wrappers
+
 multi_collect_environment.register()
 
 parser = argparse.ArgumentParser()
@@ -19,17 +20,17 @@ parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--batch_size", default=256, type=int, help="Batch size.")
-parser.add_argument("--clip_epsilon", default=0.25, type=float, help="Clipping epsilon.")
-parser.add_argument("--entropy_regularization", default=1e-1, type=float, help="Entropy regularization weight.")
-parser.add_argument("--envs", default=8, type=int, help="Workers during experience collection.")
+parser.add_argument("--clip_epsilon", default=0.15, type=float, help="Clipping epsilon.")
+parser.add_argument("--entropy_regularization", default=0.01, type=float, help="Entropy regularization weight.")
+parser.add_argument("--envs", default=32, type=int, help="Workers during experience collection.")
 parser.add_argument("--epochs", default=7, type=int, help="Epochs to train each iteration.")
 parser.add_argument("--evaluate_each", default=1, type=int, help="Evaluate each given number of iterations.")
-parser.add_argument("--evaluate_for", default=100, type=int, help="Evaluate the given number of episodes.")
+parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=256, type=int, help="Size of hidden layer.")
 parser.add_argument("--learning_rate", default=1e-4, type=float, help="Learning rate.")
-parser.add_argument("--trace_lambda", default=0.9, type=float, help="Traces factor lambda.")
-parser.add_argument("--worker_steps", default=10000, type=int, help="Steps for each worker to perform.")
+parser.add_argument("--trace_lambda", default=0.95, type=float, help="Traces factor lambda.")
+parser.add_argument("--worker_steps", default=512, type=int, help="Steps for each worker to perform.")
 
 
 class Network:
@@ -158,7 +159,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             next_state, reward, terminated, truncated, _ = venv.step(action)
             done = terminated | truncated
 
-
             # TODO: Compute and collect the required quantities
             states.append(state)
             actions.append(action)
@@ -178,11 +178,9 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         for i in range(args.envs):
             advantage, ret = [], []
             g = 0
-            for t in range(len(states)-1, -1, -1):
-                if dones[t][i]:
-                    g = 0
-                td_error = rewards[t][i] + (1 - dones[t][i]) * args.gamma * values[t+1][i] - values[t][i]
-                g = td_error + args.gamma * args.trace_lambda * g
+            for t in range(len(states) - 1, -1, -1):
+                td_error = rewards[t][i] + (1 - dones[t][i]) * args.gamma * values[t + 1][i] - values[t][i]
+                g = td_error + (1-dones[t][i]) * args.gamma * args.trace_lambda * g
                 advantage.append(g)
                 ret.append(g + values[t][i])
             advantages.append(advantage[::-1])
@@ -192,31 +190,29 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # you should randomly sample batches of size `args.batch_size` from the collected data.
         # A possible approach is to create a dataset of `(states, actions, action_probs, advantages, returns)`
         # quintuples using a single `torch.utils.data.StackDataset` and then use a dataloader.
-        dataset = torch.utils.data.TensorDataset(
-            torch.tensor(np.concatenate(states), dtype=torch.float32),
-            torch.tensor(np.concatenate(actions), dtype=torch.int64),
-            torch.tensor(np.concatenate(action_probs), dtype=torch.float32),
-            torch.tensor(np.concatenate(np.array(advantages)), dtype=torch.float32),
-            torch.tensor(np.concatenate(np.array(returns)), dtype=torch.float32),
-        )
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
-
+        advantages_np = np.array(advantages)
+        returns_np = np.array(returns)
+        returns_transposed = np.transpose(returns_np, (1, 0, 2))
+        advantages_transposed = np.transpose(advantages_np, (1, 0, 2))
         states_concat = np.concatenate(states)
         actions_concat = np.concatenate(actions)
         action_probs_concat = np.concatenate(action_probs)
-        advantages_concat = np.concatenate(np.array(advantages))
-        returns_concat = np.concatenate(np.array(returns))
+        advantages_concat = np.concatenate(advantages_transposed)
+        returns_concat = np.concatenate(returns_transposed)
 
+        dataset = torch.utils.data.TensorDataset(
+            torch.tensor(states_concat, dtype=torch.float32),
+            torch.tensor(actions_concat, dtype=torch.int64),
+            torch.tensor(action_probs_concat, dtype=torch.float32),
+            torch.tensor(advantages_concat, dtype=torch.float32),
+            torch.tensor(returns_concat, dtype=torch.float32),
+        )
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
-        for epoch in range(args.epochs):
-            random_idx_batch = np.random.choice(len(states_concat), args.batch_size)
-            states_batch = states_concat[random_idx_batch]
-            actions_batch = actions_concat[random_idx_batch]
-            action_probs_batch = action_probs_concat[random_idx_batch]
-            advantages_batch = advantages_concat[random_idx_batch]
-            returns_batch = returns_concat[random_idx_batch]
-
-            network.train(states_batch, actions_batch, action_probs_batch, advantages_batch, returns_batch)
+        for _ in range(args.epochs):
+            for batch in dataloader:
+                states, actions, action_probs, advantages, returns = batch
+                network.train(states, actions, action_probs, advantages, returns)
 
         # Periodic evaluation
         iteration += 1
