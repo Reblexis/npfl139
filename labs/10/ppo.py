@@ -78,14 +78,9 @@ class Network:
     # to PyTorch tensors of given type, and converts the result to a NumPy array.
     def train(self, states: torch.Tensor, actions: torch.Tensor, action_probs: torch.Tensor,
               advantages: torch.Tensor, returns: torch.Tensor) -> None:
-        # TODO: Perform a single training step of the PPO algorithm.
-        # For the policy model, the sum is the sum of:
-        # - the PPO loss, where `self._args.clip_epsilon` is used to clip the probability ratio
-        # - the entropy regularization with coefficient `self._args.entropy_regularization`.
-        #   You can compute it for example using the `torch.distributions.Categorical` class.
-        _, newlogprob, entropy = self.predict_actions(states, action=actions)
+        _, probability, entropy = self.predict_actions(states, action=actions)
         new_value = self.predict_values(states).squeeze()
-        ratio = torch.exp(newlogprob-action_probs)
+        ratio = torch.exp(probability-action_probs)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         ppo_loss = -torch.min(ratio * advantages, torch.clamp(ratio, 1 - self._args.clip_epsilon, 1 + self._args.clip_epsilon) * advantages).mean()
@@ -142,7 +137,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Create the vectorized environment
     venv = gym.make_vec(env.spec.id, args.envs, gym.VectorizeMode.ASYNC)
 
-    next_obs, autoreset = venv.reset(seed=args.seed)[0], np.zeros(args.envs, dtype=bool)
+    state, autoreset = venv.reset(seed=args.seed)[0], np.zeros(args.envs, dtype=bool)
     next_done = np.zeros(args.envs, dtype=bool)
     training = True
     iteration = 0
@@ -151,20 +146,19 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     while training:
         # Collect experience. Notably, we collect the following quantities
         # as tensors with the first two dimensions `[args.worker_steps, args.envs]`.
-        states = np.zeros((args.worker_steps, args.envs, env.observation_space.shape[0]))
-        actions = np.zeros((args.worker_steps, args.envs))
-        action_probabilities = np.zeros((args.worker_steps, args.envs))
-        rewards = np.zeros((args.worker_steps, args.envs))
-        dones = np.zeros((args.worker_steps, args.envs))
-        values = np.zeros((args.worker_steps, args.envs))
+        states = np.zeros((args.worker_steps, args.envs, env.observation_space.shape[0]), dtype=np.float32)
+        actions, action_probabilities, rewards, dones = [np.zeros((args.worker_steps, args.envs), dtype=np.float32) for _ in
+                                                 range(4)]
+        values = np.zeros((args.worker_steps + 1, args.envs), dtype=np.float32)
+        with torch.no_grad():
+            values[0] = network.predict_values(torch.tensor(state).to(network.device)).cpu().numpy().squeeze()
 
         for step in range(args.worker_steps):
-            states[step] = next_obs
+            states[step] = state
             dones[step] = next_done
 
             with torch.no_grad():
-                action, probability, _ = network.predict_actions(torch.tensor(next_obs).to(network.device))
-                values[step] = network.predict_values(torch.tensor(next_obs).to(network.device))[0].cpu().numpy()
+                action, probability, _ = network.predict_actions(torch.tensor(state).to(network.device))
 
             action = action.cpu().numpy()
             probability = probability.cpu().numpy()
@@ -172,9 +166,11 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             action_probabilities[step] = probability
 
             # Perform the step
-            next_obs, reward, terminated, truncated, _ = venv.step(action)
+            state, reward, terminated, truncated, _ = venv.step(action)
             next_done = terminated | truncated
             rewards[step] = reward
+            with torch.no_grad():
+                values[step+1] = network.predict_values(torch.tensor(state).to(network.device)).cpu().numpy().squeeze()
 
             #wandb.log({"step": step})
 
@@ -185,34 +181,20 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # You need to process episodes of individual workers independently, and note that
         # each worker might have generated multiple episodes, the last one probably unfinished.
         with torch.no_grad():
-            next_value = network.predict_values(torch.tensor(next_obs).to(network.device))[0].cpu().numpy()
-            advantages = np.zeros((args.worker_steps, args.envs))
-            lastgaelam = 0
-            for t in reversed(range(args.worker_steps)):
-                if t == args.worker_steps - 1:
-                    nextnonterminal = 1.0 - next_done
-                    nextvalues = next_value
-                else:
-                    nextnonterminal = 1.0 - dones[t + 1]
-                    nextvalues = values[t + 1]
-                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.trace_lambda * nextnonterminal * lastgaelam
-
-            returns = advantages + values
-
-        # TODO: Train for `args.epochs` using the collected data. In every epoch,
-        # you should randomly sample batches of size `args.batch_size` from the collected data.
-        # A possible approach is to create a dataset of `(states, actions, action_probs, advantages, returns)`
-        # quintuples using a single `torch.utils.data.StackDataset` and then use a dataloader.
-
-        # Join first two dims
+            advantages, returns = np.zeros_like(rewards), np.zeros_like(rewards)
+            for i in range(args.envs):
+                g = 0
+                for t in reversed(range(args.worker_steps)):
+                    td_error = rewards[t][i] + (1 - dones[t][i]) * args.gamma * values[t + 1][i] - values[t][i]
+                    g = td_error + (1 - dones[t][i]) * args.gamma * args.trace_lambda * g
+                    advantages[t][i] = g
+                    returns[t][i] = g + values[t][i]
 
         states = states.reshape(-1, states.shape[-1])
         action_probabilities = action_probabilities.reshape(-1)
         actions = actions.reshape(-1)
         advantages = advantages.reshape(-1)
         returns = returns.reshape(-1)
-        values = values.reshape(-1)
 
         dataset = torch.utils.data.TensorDataset(torch.tensor(states, dtype=torch.float32).to(network.device),
                                                     torch.tensor(actions, dtype=torch.float32).to(network.device),
@@ -242,8 +224,9 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     args = parser.parse_args([] if "__file__" not in globals() else None)
 
-    wandb.init(project=args.env)
-    wandb.config.update(args)
+    if USE_WANDB:
+        wandb.init(project=args.env)
+        wandb.config.update(args)
 
     # Create the environment
     env = wrappers.EvaluationEnv(gym.make(args.env), args.seed, args.render_each)
