@@ -213,7 +213,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         iteration += 1
         if iteration % args.evaluate_each == 0:
             returns = [evaluate_episode() for _ in range(args.evaluate_for)]
-            if np.mean(returns) > 460:
+            if np.mean(returns) > 510:
                 training = False
             if USE_WANDB:
                 wandb.log({"return": np.mean(returns)})
