@@ -32,7 +32,9 @@ parser.add_argument("--learning_rate", default=3e-4, type=float, help="Learning 
 parser.add_argument("--trace_lambda", default=0.95, type=float, help="Traces factor lambda.")
 parser.add_argument("--worker_steps", default=512, type=int, help="Steps for each worker to perform.")
 
-import wandb
+USE_WANDB = False
+if USE_WANDB:
+    import wandb
 
 class Network:
     # Use GPU if available.
@@ -57,6 +59,8 @@ class Network:
             self.init_layer(torch.nn.Linear(args.hidden_layer_size, 1), std=1.0)
         ).to(self.device)
 
+        self.MSE_loss = torch.nn.MSELoss()
+
         self._optimizer = torch.optim.Adam(list(self._actor.parameters()) + list(self._critic.parameters()), lr=args.learning_rate, eps=1e-5)
 
     def init_layer(self, layer, std=np.sqrt(2)):
@@ -80,23 +84,21 @@ class Network:
         # - the entropy regularization with coefficient `self._args.entropy_regularization`.
         #   You can compute it for example using the `torch.distributions.Categorical` class.
         _, newlogprob, entropy = self.predict_actions(states, action=actions)
-        newvalue = self.predict_values(states).squeeze()
-        logratio = newlogprob - action_probs
-        ratio = torch.exp(logratio)
+        new_value = self.predict_values(states).squeeze()
+        ratio = torch.exp(newlogprob-action_probs)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        pg_loss1 = ratio * advantages
-        pg_loss2 = torch.clamp(ratio, 1 - self._args.clip_epsilon, 1 + self._args.clip_epsilon) * advantages
-        ppo_loss = -torch.min(pg_loss1, pg_loss2).mean()
+        ppo_loss = -torch.min(ratio * advantages, torch.clamp(ratio, 1 - self._args.clip_epsilon, 1 + self._args.clip_epsilon) * advantages).mean()
 
-        v_loss = 0.5 * ((newvalue - returns) ** 2).mean()
+        v_loss = self.MSE_loss(new_value, returns)
 
-        entropy_loss = self._args.entropy_regularization * entropy.mean()
+        entropy_loss = -self._args.entropy_regularization * entropy.mean()
 
-        loss = ppo_loss + v_loss - entropy_loss
+        loss = ppo_loss + v_loss + entropy_loss
 
-        wandb.log({"ppo_loss": ppo_loss})
-        wandb.log({"entropy_loss": entropy_loss})
+        if USE_WANDB:
+            wandb.log({"ppo_loss": ppo_loss})
+            wandb.log({"entropy_loss": entropy_loss})
 
         self._optimizer.zero_grad()
         loss.backward()
@@ -104,14 +106,13 @@ class Network:
 
     def predict_actions(self, states: torch.Tensor, greedy=False, action=None):
         logits = self._actor(states)
-        probs = torch.distributions.categorical.Categorical(logits=logits)
+        dist = torch.distributions.categorical.Categorical(logits=logits)
         if action is None:
             if greedy:
                 action = torch.argmax(logits, dim=-1)
             else:
-                action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy()
-
+                action = dist.sample()
+        return action, dist.log_prob(action), dist.entropy()
 
     def predict_values(self, states: torch.Tensor):
         return self._critic(states)
@@ -141,36 +142,34 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Create the vectorized environment
     venv = gym.make_vec(env.spec.id, args.envs, gym.VectorizeMode.ASYNC)
 
-    # Training
     next_obs, autoreset = venv.reset(seed=args.seed)[0], np.zeros(args.envs, dtype=bool)
     next_done = np.zeros(args.envs, dtype=bool)
     training = True
     iteration = 0
-    #step = 0
-    #wandb.log({"step": step})
 
-    obs = np.zeros((args.worker_steps, args.envs) + env.observation_space.shape)
-    actions = np.zeros((args.worker_steps, args.envs) + env.action_space.shape)
-    logprobs = np.zeros((args.worker_steps, args.envs))
-    rewards = np.zeros((args.worker_steps, args.envs))
-    dones = np.zeros((args.worker_steps, args.envs))
-    values = np.zeros((args.worker_steps, args.envs))
 
     while training:
         # Collect experience. Notably, we collect the following quantities
         # as tensors with the first two dimensions `[args.worker_steps, args.envs]`.
+        states = np.zeros((args.worker_steps, args.envs, env.observation_space.shape[0]))
+        actions = np.zeros((args.worker_steps, args.envs))
+        action_probabilities = np.zeros((args.worker_steps, args.envs))
+        rewards = np.zeros((args.worker_steps, args.envs))
+        dones = np.zeros((args.worker_steps, args.envs))
+        values = np.zeros((args.worker_steps, args.envs))
+
         for step in range(args.worker_steps):
-            obs[step] = next_obs
+            states[step] = next_obs
             dones[step] = next_done
 
             with torch.no_grad():
-                action, logprob, _ = network.predict_actions(torch.tensor(next_obs).to(network.device))
+                action, probability, _ = network.predict_actions(torch.tensor(next_obs).to(network.device))
                 values[step] = network.predict_values(torch.tensor(next_obs).to(network.device))[0].cpu().numpy()
 
             action = action.cpu().numpy()
-            logprob = logprob.cpu().numpy()
+            probability = probability.cpu().numpy()
             actions[step] = action
-            logprobs[step] = logprob
+            action_probabilities[step] = probability
 
             # Perform the step
             next_obs, reward, terminated, truncated, _ = venv.step(action)
@@ -179,7 +178,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
             #wandb.log({"step": step})
 
-        wandb.log({"average_value": np.mean(values)})
+        if USE_WANDB:
+            wandb.log({"average_value": np.mean(values)})
         # TODO: Estimate `advantages` and `returns` (they differ only by the value function estimate)
         # using lambda-return with coefficients `args.trace_lambda` and `args.gamma`.
         # You need to process episodes of individual workers independently, and note that
@@ -207,34 +207,31 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
         # Join first two dims
 
-        b_obs = obs.reshape((-1,) + env.observation_space.shape)
-        b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + env.action_space.shape)
-        b_advantages = advantages.reshape(-1)
-        b_returns = returns.reshape(-1)
-        b_values = values.reshape(-1)
+        states = states.reshape(-1, states.shape[-1])
+        action_probabilities = action_probabilities.reshape(-1)
+        actions = actions.reshape(-1)
+        advantages = advantages.reshape(-1)
+        returns = returns.reshape(-1)
+        values = values.reshape(-1)
 
-        total_size = args.envs * args.worker_steps
-        b_inds = np.arange(total_size)
-        for epoch in range(args.epochs):
-            np.random.shuffle(b_inds)
-            for start in range(0, total_size, args.batch_size):
-                end = start + args.batch_size
-                inds = b_inds[start:end]
+        dataset = torch.utils.data.TensorDataset(torch.tensor(states, dtype=torch.float32).to(network.device),
+                                                    torch.tensor(actions, dtype=torch.float32).to(network.device),
+                                                    torch.tensor(action_probabilities, dtype=torch.float32).to(network.device),
+                                                    torch.tensor(advantages, dtype=torch.float32).to(network.device),
+                                                    torch.tensor(returns, dtype=torch.float32).to(network.device))
 
-                network.train(
-                    torch.tensor(b_obs[inds], dtype=torch.float32).to(network.device),
-                    torch.tensor(b_actions[inds], dtype=torch.float32).to(network.device),
-                    torch.tensor(b_logprobs[inds], dtype=torch.float32).to(network.device),
-                    torch.tensor(b_advantages[inds], dtype=torch.float32).to(network.device),
-                    torch.tensor(b_returns[inds], dtype=torch.float32).to(network.device)
-                )
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+
+        for _ in range(args.epochs):
+            for batch in dataloader:
+                network.train(*batch)
 
         # Periodic evaluation
         iteration += 1
         if iteration % args.evaluate_each == 0:
             returns = [evaluate_episode() for _ in range(args.evaluate_for)]
-            wandb.log({"return": np.mean(returns)})
+            if USE_WANDB:
+                wandb.log({"return": np.mean(returns)})
             print(f"Iteration {iteration}, average return {np.mean(returns)}")
 
     # Final evaluation
