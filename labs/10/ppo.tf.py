@@ -20,18 +20,19 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
-parser.add_argument("--clip_epsilon", default=..., type=float, help="Clipping epsilon.")
-parser.add_argument("--entropy_regularization", default=0.1, type=float, help="Entropy regularization weight.")
-parser.add_argument("--envs", default=..., type=int, help="Workers during experience collection.")
-parser.add_argument("--epochs", default=..., type=int, help="Epochs to train each iteration.")
-parser.add_argument("--evaluate_each", default=10, type=int, help="Evaluate each given number of iterations.")
+parser.add_argument("--batch_size", default=256, type=int, help="Batch size.")
+parser.add_argument("--clip_epsilon", default=0.15, type=float, help="Clipping epsilon.")
+parser.add_argument("--entropy_regularization", default=0.01, type=float, help="Entropy regularization weight.")
+parser.add_argument("--envs", default=32, type=int, help="Workers during experience collection.")
+parser.add_argument("--epochs", default=7, type=int, help="Epochs to train each iteration.")
+parser.add_argument("--evaluate_each", default=1, type=int, help="Evaluate each given number of iterations.")
 parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
-parser.add_argument("--gamma", default=..., type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=50, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
-parser.add_argument("--trace_lambda", default=..., type=float, help="Traces factor lambda.")
-parser.add_argument("--worker_steps", default=..., type=int, help="Steps for each worker to perform.")
+parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
+parser.add_argument("--hidden_layer_size", default=256, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=3e-4, type=float, help="Learning rate.")
+parser.add_argument("--trace_lambda", default=0.95, type=float, help="Traces factor lambda.")
+parser.add_argument("--worker_steps", default=512, type=int, help="Steps for each worker to perform.")
+
 
 
 # TODO: Note that this time we derive the Network directly from `keras.Model`.
@@ -94,7 +95,13 @@ class Network(keras.Model):
             advantages = targets["advantages"]
             returns = targets["returns"]
 
-            loss =
+            ratio = tf.reduce_sum(policy * tf.one_hot(actions, policy.shape[-1]), axis=-1) / action_probs
+            clipped_ratio = tf.clip_by_value(ratio, 1 - self._args.clip_epsilon, 1 + self._args.clip_epsilon)
+            ppo_loss = -tf.reduce_mean(tf.minimum(ratio * advantages, clipped_ratio * advantages))
+            value_loss = tf.reduce_mean(tf.square(value - returns))
+            entropy_loss = -tf.reduce_mean(keras.losses.categorical_crossentropy(policy, policy))
+
+            loss = ppo_loss + value_loss + self._args.entropy_regularization * entropy_loss
 
         # Perform an optimizer step and return the loss for reporting and visualization.
         self.optimizer.apply(tf.gradients(loss, self.trainable_variables), self.trainable_variables)
@@ -119,7 +126,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         rewards, state, done = 0, env.reset(start_evaluation=start_evaluation, logging=logging)[0], False
         while not done:
             # TODO: Predict the action using the greedy policy
-            action = ...
+            action = np.argmax(network.predict(np.array([state]))[0])
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             rewards += reward
@@ -135,19 +142,32 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     while training:
         # Collect experience. Notably, we collect the following quantities
         # as tensors with the first two dimensions `[args.worker_steps, args.envs]`.
-        states, actions, action_probs, rewards, dones, values = [], [], [], [], [], []
-        for _ in range(args.worker_steps):
+
+        states = np.zeros((args.worker_steps, args.envs, env.observation_space.shape[0]), dtype=np.float32)
+        actions = np.zeros((args.worker_steps, args.envs, 1), dtype=np.int32)
+        action_probs, rewards, dones = [np.zeros((args.worker_steps, args.envs, 1), dtype=np.float32) for _ in range(3)]
+        values = np.zeros((args.worker_steps + 1, args.envs, 1), dtype=np.float32)
+        values[0] = network.predict(state)[1]
+
+        for t in range(args.worker_steps):
             # TODO: Choose `action`, which is a vector of `args.envs` actions, each
             # sampled from the corresponding policy generated by the `network.predict`
             # executed on the vector `state`.
-            action = ...
+
+            probs, values[t + 1] = network.predict(state)
+            action = np.array([np.random.choice(env.action_space.n, p=probs[i]) for i in range(args.envs)])[:, np.newaxis]
 
             # Perform the step
-            next_state, reward, terminated, truncated, _ = venv.step(action)
+            next_state, reward, terminated, truncated, _ = venv.step(action[:, 0])
             done = terminated | truncated
 
-            # TODO: Collect the required quantities
-            ...
+            states[t] = state
+            actions[t] = action
+            corresponding_probs = np.array([probs[i][action[i]] for i in range(len(probs))])
+            action_probs[t] = corresponding_probs
+            rewards[t] = reward[:, np.newaxis]
+            dones[t] = done[:, np.newaxis]
+
 
             state = next_state
 
@@ -155,18 +175,27 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # using lambda-return with coefficients `args.trace_lambda` and `args.gamma`.
         # You need to process episodes of individual workers independently, and note that
         # each worker might have generated multiple episodes, the last one probably unfinished.
-        advantages, returns = ...
+
+        advantages, returns = np.zeros_like(rewards), np.zeros_like(rewards)
+        for i in range(args.envs):
+            g = 0
+            for t in reversed(range(args.worker_steps)):
+                td_error = rewards[t][i] + (1 - dones[t][i]) * args.gamma * values[t + 1][i] - values[t][i]
+                g = td_error + (1-dones[t][i]) * args.gamma * args.trace_lambda * g
+                advantages[t][i] = g
+                returns[t][i] = g + values[t][i]
+
 
         # Train using the Keras API.
         # - The below code assumes that the first two dimensions of the used quantities are
         #   `[args.worker_steps, args.envs]` and concatenates them together.
         # - We do not log the training by passing `verbose=0`; feel free to change it.
         network.fit(
-            np.concatenate(states),
-            {"actions": np.concatenate(actions),
-             "action_probs": np.concatenate(action_probs),
-             "advantages": np.concatenate(advantages),
-             "returns": np.concatenate(returns)},
+            np.reshape(states, (-1, states.shape[-1])),
+            {"actions": np.reshape(actions, (-1, 1)),
+             "action_probs": np.reshape(action_probs, (-1, 1)),
+             "advantages": np.reshape(advantages, (-1, 1)),
+             "returns": np.reshape(returns, (-1, 1))},
             batch_size=args.batch_size, epochs=args.epochs, verbose=0,
         )
 
