@@ -14,7 +14,7 @@ multi_collect_environment.register()
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--env", default="SingleCollect-v0", type=str, help="Environment.")
-parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
+parser.add_argument("--recodex", default=True, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
@@ -78,24 +78,25 @@ class Network:
     # to PyTorch tensors of given type, and converts the result to a NumPy array.
     def train(self, states: torch.Tensor, actions: torch.Tensor, action_probs: torch.Tensor,
               advantages: torch.Tensor, returns: torch.Tensor) -> None:
-        _, probability, entropy = self.predict_actions(states, action=actions)
-        new_value = self.predict_values(states).squeeze()
-        ratio = torch.exp(probability-action_probs)
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        actor_predictions = torch.nn.functional.softmax(self._actor(states), dim=-1).squeeze()
+        critic_predictions = self._critic(states).squeeze()
 
+        ratio = actor_predictions[torch.arange(len(actor_predictions)), actions] / torch.exp(action_probs)
         ppo_loss = -torch.min(ratio * advantages, torch.clamp(ratio, 1 - self._args.clip_epsilon, 1 + self._args.clip_epsilon) * advantages).mean()
 
-        v_loss = self.MSE_loss(new_value, returns)
+        entropy = torch.distributions.Categorical(actor_predictions).entropy().mean()
+        entropy_loss = -self._args.entropy_regularization * entropy
 
-        entropy_loss = -self._args.entropy_regularization * entropy.mean()
+        actor_loss = ppo_loss + entropy_loss
 
-        loss = ppo_loss + v_loss + entropy_loss
+        # TODO: The critic model is trained in a stadard way, by using the MSE
+        # error between the predicted value function and target returns.
 
-        if USE_WANDB:
-            wandb.log({"ppo_loss": ppo_loss})
-            wandb.log({"entropy_loss": entropy_loss})
+        critic_loss = torch.nn.functional.mse_loss(critic_predictions.squeeze(), returns.squeeze())
 
+        # Perform the optimization step
         self._optimizer.zero_grad()
+        loss = actor_loss + critic_loss
         loss.backward()
         self._optimizer.step()
 
@@ -197,7 +198,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         returns = returns.reshape(-1)
 
         dataset = torch.utils.data.TensorDataset(torch.tensor(states, dtype=torch.float32).to(network.device),
-                                                    torch.tensor(actions, dtype=torch.float32).to(network.device),
+                                                    torch.tensor(actions, dtype=torch.int64).to(network.device),
                                                     torch.tensor(action_probabilities, dtype=torch.float32).to(network.device),
                                                     torch.tensor(advantages, dtype=torch.float32).to(network.device),
                                                     torch.tensor(returns, dtype=torch.float32).to(network.device))
@@ -212,6 +213,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         iteration += 1
         if iteration % args.evaluate_each == 0:
             returns = [evaluate_episode() for _ in range(args.evaluate_for)]
+            if np.mean(returns) > 460:
+                training = False
             if USE_WANDB:
                 wandb.log({"return": np.mean(returns)})
             print(f"Iteration {iteration}, average return {np.mean(returns)}")
