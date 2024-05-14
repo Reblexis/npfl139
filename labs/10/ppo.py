@@ -79,7 +79,7 @@ class Network:
         # - the PPO loss, where `self._args.clip_epsilon` is used to clip the probability ratio
         # - the entropy regularization with coefficient `self._args.entropy_regularization`.
         #   You can compute it for example using the `torch.distributions.Categorical` class.
-        _, newlogprob, entropy = self.predict_actions(states)
+        _, newlogprob, entropy = self.predict_actions(states, action=actions)
         newvalue = self.predict_values(states).squeeze()
         logratio = newlogprob - action_probs
         ratio = torch.exp(logratio)
