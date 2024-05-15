@@ -13,13 +13,13 @@ import wrappers
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--recodex", default=True, action="store_true", help="Running in ReCodEx")
+parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--alpha", default=0.3, type=float, help="MCTS root Dirichlet alpha")
-parser.add_argument("--batch_size", default=256, type=int, help="Number of game positions to train on.")
+parser.add_argument("--batch_size", default=1024, type=int, help="Number of game positions to train on.")
 parser.add_argument("--epsilon", default=0.25, type=float, help="MCTS exploration epsilon in root")
 parser.add_argument("--evaluate_each", default=1, type=int, help="Evaluate each number of iterations.")
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
