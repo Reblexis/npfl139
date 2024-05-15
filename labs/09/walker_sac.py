@@ -56,6 +56,8 @@ class Network:
                 self.relu1 = torch.nn.ReLU()
                 self.layer2 = torch.nn.Linear(hidden_layer_size, hidden_layer_size)
                 self.relu2 = torch.nn.ReLU()
+                self.layer3 = torch.nn.Linear(hidden_layer_size, hidden_layer_size)
+                self.relu3 = torch.nn.ReLU()
                 self.mean_layer = torch.nn.Linear(hidden_layer_size, env.action_space.shape[0])
                 self.sds_layer = torch.nn.Linear(hidden_layer_size, env.action_space.shape[0])
 
@@ -110,6 +112,7 @@ class Network:
 
                 x = self.relu1(self.layer1(inputs))
                 x = self.relu2(self.layer2(x))
+                x = self.relu3(self.layer3(x))
                 mus = self.mean_layer(x)
                 sds = torch.exp(self.sds_layer(x))
 
@@ -294,10 +297,13 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         wandb.log({"step": steps})
 
     random_value = random.randint(0, 1000000)
+
+    random_value = 910625
+    network.load_all(f"{args.env}_{random_value}")
     wandb.log({"random_value": random_value})
     env_thresholds = {"Pendulum-v1": -180, "InvertedDoublePendulum-v5" : 9200, "BipedalWalker-v3": 210, "BipedalWalkerHardcore-v3": 110, "HalfCheetah-v5": 8200}
 
-    best = -np.inf
+    best = 4800
     while training:
         for _ in range(args.evaluate_each):
             # Predict actions by calling `network.predict_sampled_actions`.
