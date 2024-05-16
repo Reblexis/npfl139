@@ -21,7 +21,7 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--alpha", default=0.3, type=float, help="MCTS root Dirichlet alpha")
 parser.add_argument("--batch_size", default=1024, type=int, help="Number of game positions to train on.")
 parser.add_argument("--epsilon", default=0.25, type=float, help="MCTS exploration epsilon in root")
-parser.add_argument("--evaluate_each", default=1, type=int, help="Evaluate each number of iterations.")
+parser.add_argument("--evaluate_each", default=10, type=int, help="Evaluate each number of iterations.")
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 parser.add_argument("--model_path", default="az_quiz.pt", type=str, help="Model path")
 parser.add_argument("--num_simulations", default=100, type=int, help="Number of simulations in one MCTS.")
@@ -84,7 +84,7 @@ class Agent:
 
     def __init__(self, args: argparse.Namespace):
         self._model = Network().to(self.device)
-        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=args.learning_rate)
+        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
 
     @classmethod
     def load(cls, path: str, args: argparse.Namespace) -> "Agent":
@@ -374,7 +374,7 @@ def train(args: argparse.Namespace) -> Agent:
             score = az_quiz_evaluator.evaluate(
                 [Player(agent, argparse.Namespace(num_simulations=0)),
                  az_quiz_player_simple_heuristic.Player(seed=args.seed)],
-                games=56, randomized=False, first_chosen=False, render=False, verbose=False)
+                games=300, randomized=True, first_chosen=True, render=False, verbose=False)
             if score > best_score:
                 agent.save(args.model_path)
                 best_score = score
