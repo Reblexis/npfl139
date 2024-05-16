@@ -378,7 +378,7 @@ def train(args: argparse.Namespace) -> Agent:
             score = az_quiz_evaluator.evaluate(
                 [Player(agent, argparse.Namespace(num_simulations=0)),
                  az_quiz_player_simple_heuristic.Player(seed=args.seed)],
-                games=28*10, randomized=True, first_chosen=True, render=False, verbose=False)
+                games=28*10, randomized=False, first_chosen=True, render=False, verbose=False)
             if score > best_score:
                 agent.save(args.model_path)
                 best_score = score
