@@ -19,7 +19,7 @@ parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--alpha", default=0.3, type=float, help="MCTS root Dirichlet alpha")
-parser.add_argument("--batch_size", default=256, type=int, help="Number of game positions to train on.")
+parser.add_argument("--batch_size", default=64, type=int, help="Number of game positions to train on.")
 parser.add_argument("--epsilon", default=0.25, type=float, help="MCTS exploration epsilon in root")
 parser.add_argument("--evaluate_each", default=10, type=int, help="Evaluate each number of iterations.")
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
@@ -27,7 +27,7 @@ parser.add_argument("--model_path", default="az_quiz.pt", type=str, help="Model 
 parser.add_argument("--num_simulations", default=100, type=int, help="Number of simulations in one MCTS.")
 parser.add_argument("--sampling_moves", default=10, type=int, help="Sampling moves.")
 parser.add_argument("--show_sim_games", default=False, action="store_true", help="Show simulated games.")
-parser.add_argument("--sim_games", default=1, type=int, help="Simulated games to generate in every iteration.")
+parser.add_argument("--sim_games", default=5, type=int, help="Simulated games to generate in every iteration.")
 parser.add_argument("--train_for", default=1, type=int, help="Update steps in every iteration.")
 parser.add_argument("--window_length", default=100_000, type=int, help="Replay buffer max length.")
 
