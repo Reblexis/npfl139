@@ -19,7 +19,7 @@ parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--alpha", default=0.3, type=float, help="MCTS root Dirichlet alpha")
-parser.add_argument("--batch_size", default=1024, type=int, help="Number of game positions to train on.")
+parser.add_argument("--batch_size", default=256, type=int, help="Number of game positions to train on.")
 parser.add_argument("--epsilon", default=0.25, type=float, help="MCTS exploration epsilon in root")
 parser.add_argument("--evaluate_each", default=10, type=int, help="Evaluate each number of iterations.")
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
@@ -186,6 +186,7 @@ class MCTNode:
         # TODO: Update the children priors by exploration noise
         # Dirichlet(alpha), so that the resulting priors are
         #   epsilon * Dirichlet(alpha) + (1 - epsilon) * original_prior
+
         dirichlet = np.random.dirichlet([alpha] * len(self.children))
 
         for i, child in enumerate(self.children.values()):
@@ -282,13 +283,16 @@ def sim_game(agent: Agent, args: argparse.Namespace) -> list[ReplayBufferEntry]:
     game = AZQuiz(randomized=False)
     current_move = 0
 
-    entries = []
+    boards = []
+    policies = []
+    outcomes = []
 
     while game.winner is None:
         # TODO: Run the `mcts` with exploration.
         policy = mcts(game, agent, args, explore=True)
 
-        entries.append(ReplayBufferEntry(agent.board(game), policy, 0))
+        boards.append(agent.board(game))
+        policies.append(policy)
 
         # TODO: Select an action, either by sampling from the policy or greedily,
         # according to the `args.sampling_moves`.
@@ -306,11 +310,14 @@ def sim_game(agent: Agent, args: argparse.Namespace) -> list[ReplayBufferEntry]:
     # - the outcome based on the outcome of the whole game.
 
     perspective_game_outcome = 1
-    for entry in reversed(entries):
-        entry.outcome = perspective_game_outcome
+    for i in range(len(boards)):
+        outcomes.append(perspective_game_outcome)
         perspective_game_outcome = -perspective_game_outcome
 
-    return entries
+    outcomes = outcomes[::-1]
+
+    return [ReplayBufferEntry(board, policy, outcome) for board, policy, outcome in zip(boards, policies, outcomes)]
+
 
 def train(args: argparse.Namespace) -> Agent:
     # Perform training
