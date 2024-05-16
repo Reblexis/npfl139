@@ -282,16 +282,13 @@ def sim_game(agent: Agent, args: argparse.Namespace) -> list[ReplayBufferEntry]:
     game = AZQuiz(randomized=False)
     current_move = 0
 
-    boards = []
-    policies = []
-    outcomes = []
+    entries = []
 
     while game.winner is None:
         # TODO: Run the `mcts` with exploration.
         policy = mcts(game, agent, args, explore=True)
 
-        boards.append(agent.board(game))
-        policies.append(policy)
+        entries.append(ReplayBufferEntry(agent.board(game), policy, 0))
 
         # TODO: Select an action, either by sampling from the policy or greedily,
         # according to the `args.sampling_moves`.
@@ -309,13 +306,11 @@ def sim_game(agent: Agent, args: argparse.Namespace) -> list[ReplayBufferEntry]:
     # - the outcome based on the outcome of the whole game.
 
     perspective_game_outcome = 1
-    for i in range(len(boards)):
-        outcomes.append(perspective_game_outcome)
+    for entry in reversed(entries):
+        entry.outcome = perspective_game_outcome
         perspective_game_outcome = -perspective_game_outcome
 
-    outcomes = outcomes[::-1]
-
-    return [ReplayBufferEntry(board, policy, outcome) for board, policy, outcome in zip(boards, policies, outcomes)]
+    return entries
 
 def train(args: argparse.Namespace) -> Agent:
     # Perform training
@@ -354,6 +349,7 @@ def train(args: argparse.Namespace) -> Agent:
                         log[1 + row].append("  " * (6 - row))
                 print(*["".join(line) for line in log], sep="\n")
 
+        print("Training...")
         # Train
         for _ in range(args.train_for):
             # TODO: Perform training by sampling an `args.batch_size` of positions
@@ -367,6 +363,7 @@ def train(args: argparse.Namespace) -> Agent:
 
         # Evaluate
         if iteration % args.evaluate_each == 0:
+            print("Evaluating...")
             # Run an evaluation on 2*56 games versus the simple heuristics,
             # using the `Player` instance defined below.
             # For speed, the implementation does not use MCTS during evaluation,
@@ -374,7 +371,7 @@ def train(args: argparse.Namespace) -> Agent:
             score = az_quiz_evaluator.evaluate(
                 [Player(agent, argparse.Namespace(num_simulations=0)),
                  az_quiz_player_simple_heuristic.Player(seed=args.seed)],
-                games=300, randomized=True, first_chosen=True, render=False, verbose=False)
+                games=28*10, randomized=True, first_chosen=True, render=False, verbose=False)
             if score > best_score:
                 agent.save(args.model_path)
                 best_score = score
