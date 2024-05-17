@@ -1,15 +1,22 @@
 #pragma once
 
+#include <unistd.h>
 #include <array>
 #include <functional>
 #include <memory>
 #include <random>
 #include <vector>
+#include <iostream>
+#include <sys/syscall.h>
 
 #include "az_quiz.h"
 
 typedef std::array<float, AZQuiz::ACTIONS> Policy;
 typedef std::function<void(const AZQuiz&, Policy&, float&)> Evaluator;
+
+pid_t get_thread_id() {
+    return syscall(SYS_gettid);
+}
 
 class MCTNode {
 public:
@@ -42,7 +49,10 @@ public:
             value = -1;
         else {
             Policy policy;
+            pid_t pid = get_thread_id();
+            std::cerr<<"calling evaluator "<<pid<<std::endl;
             evaluator(this->game, policy, value);
+            std::cerr<<"evaluator finished "<<pid<<std::endl;
             float policySum = 0.0;
             for (int i = 0; i < AZQuiz::ACTIONS; i++) {
                 if (this->game.valid(i)) {
@@ -125,6 +135,8 @@ void mcts(const AZQuiz& game, const Evaluator& evaluator, int num_simulations, f
             path.push_back(node);
             auto child = node->selectChild();
             action = child.first;
+            if(child.second == nullptr)
+                throw std::runtime_error("Child is nullptr");
             node = child.second;
         }
 
