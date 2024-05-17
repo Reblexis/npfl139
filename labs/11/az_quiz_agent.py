@@ -30,7 +30,7 @@ parser.add_argument("--model_path", default="az_quiz.pt", type=str, help="Model 
 parser.add_argument("--num_simulations", default=100, type=int, help="Number of simulations in one MCTS.")
 parser.add_argument("--sampling_moves", default=10, type=int, help="Sampling moves.")
 parser.add_argument("--show_sim_games", default=False, action="store_true", help="Show simulated games.")
-parser.add_argument("--sim_games", default=5, type=int, help="Simulated games to generate in every iteration.")
+parser.add_argument("--sim_games", default=32, type=int, help="Simulated games to generate in every iteration.")
 parser.add_argument("--train_for", default=1, type=int, help="Update steps in every iteration.")
 parser.add_argument("--window_length", default=100_000, type=int, help="Replay buffer max length.")
 
@@ -132,7 +132,6 @@ class Agent:
             game = game.clone(swap_players=True)
 
         board = game.board
-        board = board[:, :, :3]
 
         # move channel to front
         board = np.moveaxis(board, -1, 0)
