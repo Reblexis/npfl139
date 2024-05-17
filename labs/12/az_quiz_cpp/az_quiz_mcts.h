@@ -3,6 +3,7 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <random>
 
 #include "az_quiz.h"
 
@@ -37,13 +38,13 @@ struct MCTNode{
             return visitCount > 0;
         }
 
-        void evaluate(AZQuiz&& game, const Evaluator& evaluator){
+        void evaluate(AZQuiz game, const Evaluator& evaluator){
             if(isEvaluated())
                 throw std::runtime_error("Cannot evaluate a node more than once");
 
-            this->game = std::move(game);
+            this->game = game;
 
-            float value = 0
+            float value = 0;
             if(game.winner >= 0)
                 value = -1;
             else{
@@ -80,7 +81,7 @@ struct MCTNode{
 
             // Generate gamma distributed numbers and compute their sum
             for (auto& value : dirichlet) {
-                value = d(gen);
+                value = gamma(gen);
                 sum += value;
             }
 
@@ -97,12 +98,12 @@ struct MCTNode{
             }
         }
 
-        pair<int, MCTNode*> selectChild(){
+        std::pair<int, MCTNode*> selectChild(){
             if(!isEvaluated())
                 throw std::runtime_error("Cannot select a child from a node that has not been evaluated");
 
             float bestValue = -INFINITY;
-            pair<int, MCTNode*> bestChild = {-1, nullptr};
+            std::pair<int, MCTNode*> bestChild = {-1, nullptr};
 
             for(int i = 0; i < AZQuiz::ACTIONS; i++){
                 if(children[i]){
@@ -137,13 +138,15 @@ void mcts(const AZQuiz& game, const Evaluator& evaluator, int num_simulations, f
 
         while(node->validChildrenCount > 0){
             parents.push_back(node);
-            auto [action, node] = node->selectChild();
+            auto child = node->selectChild();
+            action = child.first;
+            node = child.second;
         }
 
         if(!node->isEvaluated()){
             AZQuiz game = parents.back()->game;
             game.move(action);
-            node->evaluate(std::move(game), evaluator);
+            node->evaluate(game, evaluator);
         }
         else{
             node->totalValue += -1;
