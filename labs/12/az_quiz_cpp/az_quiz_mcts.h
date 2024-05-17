@@ -15,10 +15,10 @@ class MCTNode {
 public:
     std::array<std::unique_ptr<MCTNode>, AZQuiz::ACTIONS> children;
     AZQuiz game;
-    float totalValue;
-    float prior;
-    int visitCount;
-    int validChildrenCount;
+    float totalValue=0.0f;
+    float prior=0.0f;
+    int visitCount=0;
+    int validChildrenCount=0;
 
     explicit MCTNode(float prior)
         : prior(prior), visitCount(0), totalValue(0), validChildrenCount(0) {}
@@ -81,10 +81,10 @@ public:
             value /= sum;
         }
 
-        auto dirIt = dirichlet.rbegin();
+        auto dirIt = dirichlet.begin();
         for (auto& child : children) {
             if (child) {
-                child->prior = (1 - epsilon) * child->prior + epsilon * *dirIt++;
+                child->prior = (1 - epsilon) * child->prior + epsilon * (*dirIt++);
             }
         }
     }
@@ -120,10 +120,12 @@ void mcts(const AZQuiz& game, const Evaluator& evaluator, int num_simulations, f
         MCTNode* node = &root;
         std::vector<MCTNode*> path;
 
+        int action = -1;
         while (node->validChildrenCount > 0) {
             path.push_back(node);
-            auto [action, child] = node->selectChild();
-            node = child;
+            auto child = node->selectChild();
+            action = child.first;
+            node = child.second;
         }
 
         if (!node->isEvaluated()) {
