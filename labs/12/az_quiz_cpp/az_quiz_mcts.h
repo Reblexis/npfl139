@@ -132,7 +132,7 @@ void mcts(const AZQuiz& game, const Evaluator& evaluator, int num_simulations, f
 
     for(int i = 0; i < num_simulations; i++){
         MCTNode* node = &root;
-        vector<MCTNode*> parents;
+        std::vector<MCTNode*> parents;
         int action = -1;
 
         while(node->validChildrenCount > 0){
