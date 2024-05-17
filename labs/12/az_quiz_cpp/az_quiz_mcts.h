@@ -10,21 +10,23 @@ typedef std::array<float, AZQuiz::ACTIONS> Policy;
 
 typedef std::function<void(const AZQuiz&, Policy&, float&)> Evaluator;
 
-class MCTNode{
-    private:
-        float prior;
+struct MCTNode{
+    public:
+        std::array<MCTNode*, AZQuiz::ACTIONS> children; // ouch (no gc)
         AZQuiz game;
-        std::array<std::unique_ptr<MCTNode>, AZQuiz::ACTIONS> children;
-        int visitCount;
         float totalValue;
+        float prior;
+        int visitCount;
         int validChildrenCount;
 
-    public:
         MCTNode(float prior){
             this->prior = prior;
             visitCount = 0;
             totalValue = 0;
             validChildrenCount = 0;
+            for (int i = 0; i < AZQuiz::ACTIONS; i++) {
+                children[i] = nullptr;
+            }
         }
 
         float value() const {
@@ -56,7 +58,7 @@ class MCTNode{
                 for(int i = 0; i < AZQuiz::ACTIONS; i++){
                     if(game.valid(i)){
                         validChildrenCount++;
-                        children[i] = std::make_unique<MCTNode>(policy[i] / policySum);
+                        children[i] = new MCTNode(policy[i] / policySum);
                     }
                 }
             }
@@ -95,20 +97,20 @@ class MCTNode{
             }
         }
 
-        MCTNode* selectChild(){
+        pair<int, MCTNode*> selectChild(){
             if(!isEvaluated())
                 throw std::runtime_error("Cannot select a child from a node that has not been evaluated");
 
             float bestValue = -INFINITY;
-            MCTNode* bestChild = nullptr;
+            pair<int, MCTNode*> bestChild = {-1, nullptr};
 
             for(int i = 0; i < AZQuiz::ACTIONS; i++){
                 if(children[i]){
-                    float u = prior * sqrt(visitCount) / (1 + children[i]->visitCount);
-                    float value = children[i]->value() + u;
-                    if(value > bestValue){
-                        bestValue = value;
-                        bestChild = children[i].get();
+                    float C = 1.25;
+                    float UCBScore = -children[i]->value() + C * children[i]->prior * sqrt(visitCount) / (1 + children[i]->visitCount);
+                    if(UCBScore > bestValue){
+                        bestValue = UCBScore;
+                        bestChild = {i, children[i]};
                     }
                 }
             }
@@ -123,4 +125,50 @@ void mcts(const AZQuiz& game, const Evaluator& evaluator, int num_simulations, f
   //
   // To run the neural network, use the given `evaluator`, which returns a policy and
   // a value function for the given game.
+
+    MCTNode root(0);
+    root.evaluate(game, evaluator);
+    root.addExplorationNoise(epsilon, alpha);
+
+    for(int i = 0; i < num_simulations; i++){
+        MCTNode* node = &root;
+        vector<MCTNode*> parents;
+        int action = -1;
+
+        while(node->validChildrenCount > 0){
+            parents.push_back(node);
+            auto [action, node] = node->selectChild();
+        }
+
+        if(!node->isEvaluated()){
+            AZQuiz game = parents.back()->game;
+            game.move(action);
+            node->evaluate(std::move(game), evaluator);
+        }
+        else{
+            node->totalValue += -1;
+            node->visitCount++;
+        }
+
+        float value = node->value();
+
+        std::reverse(parents.begin(), parents.end());
+        for(auto parent : parents){
+            value = -value;
+            parent->totalValue += value;
+            parent->visitCount++;
+        }
+    }
+
+    float totalVisits = 0;
+    for(int i = 0; i < AZQuiz::ACTIONS; i++){
+        if(root.children[i]){
+            totalVisits += root.children[i]->visitCount;
+        }
+    }
+    for(int i = 0; i < AZQuiz::ACTIONS; i++){
+        if(root.children[i]){
+            policy[i] = static_cast<float>(root.children[i]->visitCount) / totalVisits;
+        }
+    }
 }
