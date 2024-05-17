@@ -68,10 +68,10 @@ class AZQuiz {
     // the current player have a fixed ID (0 or 1), or you can add another channel
     // indicating the current player (increase `AZQuiz::C` in that case).
     for (auto field : board) {
-        *output++ = field == 2;
-        *output++ = field == 3;
-        *output++ = field == 1;
-        *output++ = field >= 0;
+        *output++ = field == (2+to_play); // player at turn
+        *output++ = field == (3-to_play); // other player
+        *output++ = field == 1; // is failed
+        *output++ = field >= 0; // valid field
     }
   }
 
