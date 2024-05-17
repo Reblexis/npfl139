@@ -7,6 +7,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <random>
 
 #include "az_quiz.h"
 #include "az_quiz_mcts.h"
@@ -58,6 +59,48 @@ void worker_thread(bool randomized, int num_simulations, int sampling_moves, flo
     // - the `Policy` is the policy computed by `mcts`;
     // - the float value is the outcome of the whole game.
     // When calling `mcts`, use `worker_evaluator` as the evaluator.
+
+    AZQuiz game(randomized);
+    int currentMove = 0;
+
+    std::vector<AZQuiz> boards;
+    std::vector<Policy> policies;
+    std::vector<float> outcomes;
+
+    while(game.winner < 0){
+        Policy policy;
+        mcts(game, worker_evaluator, num_simulations, epsilon, alpha, policy);
+
+        boards.push_back(game);
+        policies.push_back(policy);
+
+        int action = -1;
+        if(currentMove < sampling_moves){
+            // Sample a move according to the policy distribution
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::discrete_distribution<> dist(policy.begin(), policy.end());
+            action = dist(gen);
+        }
+        else{
+            // Argmax
+            action = std::distance(policy.begin(), std::max_element(policy.begin(), policy.end()));
+        }
+
+        game.move(action);
+    }
+
+    float perspectiveGameOutcome = 1;
+    for(int i = 0; i < boards.size(); i++){
+        outcomes.push_back(perspectiveGameOutcome);
+        perspectiveGameOutcome *= -1;
+    }
+
+    std::reverse(boards.begin(), boards.end());
+
+    for(int i = 0; i < boards.size(); i++){
+        history->emplace_back(boards[i], policies[i], outcomes[i]);
+    }
 
     // Once the whole game is finished, we pass it to processor to return it.
     {
