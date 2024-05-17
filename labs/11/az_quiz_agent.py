@@ -2,6 +2,7 @@
 import argparse
 import collections
 import os
+import time
 
 import numpy as np
 import torch
@@ -10,6 +11,8 @@ from az_quiz import AZQuiz
 import az_quiz_evaluator
 import az_quiz_player_simple_heuristic
 import wrappers
+
+import az_quiz_cpp
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
@@ -48,7 +51,7 @@ class Network(torch.nn.Module):
         #   `tanh` activation.
         super().__init__()
 
-        self.conv1 = torch.nn.Conv2d(3, 15, kernel_size=3, padding=1)
+        self.conv1 = torch.nn.Conv2d(4, 15, kernel_size=3, padding=1)
         self.conv2 = torch.nn.Conv2d(15, 15, kernel_size=3, padding=1)
         self.conv3 = torch.nn.Conv2d(15, 15, kernel_size=3, padding=1)
         self.conv4 = torch.nn.Conv2d(15, 15, kernel_size=3, padding=1)
@@ -135,6 +138,12 @@ class Agent:
         board = np.moveaxis(board, -1, 0)
 
         return board
+
+    def __call__(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        x = np.moveaxis(x, -1, 1)
+        return self.predict(x)
+
+
 
 
 ########
@@ -276,48 +285,6 @@ def mcts(game: AZQuiz, agent: Agent, args: argparse.Namespace, explore: bool) ->
 ############
 # Training #
 ############
-ReplayBufferEntry = collections.namedtuple("ReplayBufferEntry", ["board", "policy", "outcome"])
-
-def sim_game(agent: Agent, args: argparse.Namespace) -> list[ReplayBufferEntry]:
-    # Simulate a game, return a list of `ReplayBufferEntry`s.
-    game = AZQuiz(randomized=False)
-    current_move = 0
-
-    boards = []
-    policies = []
-    outcomes = []
-
-    while game.winner is None:
-        # TODO: Run the `mcts` with exploration.
-        policy = mcts(game, agent, args, explore=True)
-
-        boards.append(agent.board(game))
-        policies.append(policy)
-
-        # TODO: Select an action, either by sampling from the policy or greedily,
-        # according to the `args.sampling_moves`.
-        if current_move < args.sampling_moves:
-            action = np.random.choice(AZQuiz.ACTIONS, p=policy)
-        else:
-            action = np.argmax(policy)
-
-        game.move(action)
-        current_move += 1
-
-    # TODO: Return all encountered game states, each consisting of
-    # - the board (probably via `agent.board`),
-    # - the policy obtained by MCTS,
-    # - the outcome based on the outcome of the whole game.
-
-    perspective_game_outcome = 1
-    for i in range(len(boards)):
-        outcomes.append(perspective_game_outcome)
-        perspective_game_outcome = -perspective_game_outcome
-
-    outcomes = outcomes[::-1]
-
-    return [ReplayBufferEntry(board, policy, outcome) for board, policy, outcome in zip(boards, policies, outcomes)]
-
 
 def train(args: argparse.Namespace) -> Agent:
     # Perform training
@@ -330,9 +297,10 @@ def train(args: argparse.Namespace) -> Agent:
     while training:
         iteration += 1
 
+        az_quiz_cpp.simulated_games_start(args.sim_games, False, args.num_simulations, args.sampling_moves, args.epsilon, args.alpha)
         # Generate simulated games
         for _ in range(args.sim_games):
-            game = sim_game(agent, args)
+            game = az_quiz_cpp.simulated_game(agent)
             replay_buffer.extend(game)
 
             # If required, show the generated game, as 8 very long lines showing
@@ -356,15 +324,17 @@ def train(args: argparse.Namespace) -> Agent:
                         log[1 + row].append("  " * (6 - row))
                 print(*["".join(line) for line in log], sep="\n")
 
+        az_quiz_cpp.simulated_games_stop()
         print("Training...")
         # Train
         for _ in range(args.train_for):
             # TODO: Perform training by sampling an `args.batch_size` of positions
             # from the `replay_buffer` and running `agent.train` on them.
-            batch = replay_buffer.sample(args.batch_size)
-            boards = np.array([entry.board for entry in batch])
-            policies = np.array([entry.policy for entry in batch])
-            outcomes = np.array([entry.outcome for entry in batch])
+            sample = replay_buffer.sample(args.batch_size) # sample is a list of tuples (board, policy, outcome)
+            boards = np.array([sample[i][0] for i in range(args.batch_size)])
+            boards = np.moveaxis(boards, -1, 1)
+            policies = np.array([sample[i][1] for i in range(args.batch_size)])
+            outcomes = np.array([sample[i][2] for i in range(args.batch_size)])
 
             agent.train(boards, policies, outcomes)
 
