@@ -20,7 +20,7 @@ pid_t get_thread_id() {
 
 class MCTNode {
 public:
-    std::array<std::unique_ptr<MCTNode>, AZQuiz::ACTIONS> children;
+    std::array<MCTNode*, AZQuiz::ACTIONS> children;
     AZQuiz game;
     float totalValue=0.0f;
     float prior=0.0f;
@@ -28,7 +28,21 @@ public:
     int validChildrenCount=0;
 
     explicit MCTNode(float prior)
-        : prior(prior), visitCount(0), totalValue(0), validChildrenCount(0) {}
+        : prior(prior), visitCount(0), totalValue(0), validChildrenCount(0) {
+            children.fill(nullptr);
+        }
+
+    MCTNode(const MCTNode&) = delete;
+    MCTNode& operator=(const MCTNode&) = delete;
+
+    MCTNode(MCTNode&&) = delete;
+    MCTNode& operator=(MCTNode&&) = delete;
+
+    ~MCTNode(){
+        for(auto node: children){
+            delete node;
+        }
+    }
 
     float value() const {
         return visitCount > 0 ? totalValue / visitCount : 0;
@@ -62,7 +76,7 @@ public:
             for (int i = 0; i < AZQuiz::ACTIONS; i++) {
                 if (this->game.valid(i)) {
                     validChildrenCount++;
-                    children[i] = std::make_unique<MCTNode>(policy[i] / policySum);
+                    children[i] = new MCTNode(policy[i] / policySum);
                 }
             }
         }
@@ -112,7 +126,7 @@ public:
                 float UCBScore = -children[i]->value() + C * children[i]->prior * sqrt(static_cast<float>(visitCount)) / (1.0f + children[i]->visitCount);
                 if (UCBScore > bestValue) {
                     bestValue = UCBScore;
-                    bestChild = {i, children[i].get()};
+                    bestChild = {i, children[i]};
                 }
             }
         }
