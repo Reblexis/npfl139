@@ -12,9 +12,9 @@ import wrappers
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--env", default="BipedalWalkerHardcore-v3", type=str, help="Environment.")
+parser.add_argument("--env", default="HalfCheetah-v5", type=str, help="Environment.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
-parser.add_argument("--render_each", default=100, type=int, help="Render some episodes.")
+parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
@@ -26,11 +26,11 @@ parser.add_argument("--gamma", default=0.99, type=float, help="Discounting facto
 parser.add_argument("--hidden_layer_size", default=256, type=int, help="Size of hidden layer.")
 parser.add_argument("--learning_rate", default=3e-4, type=float, help="Learning rate.")
 parser.add_argument("--model_path", default="walker.model", type=str, help="Model path")
-parser.add_argument("--replay_buffer_size", default=1000000, type=int, help="Replay buffer size")
+parser.add_argument("--replay_buffer_size", default=1e6, type=int, help="Replay buffer size")
 parser.add_argument("--target_entropy", default=-1, type=float, help="Target entropy per action component.")
 parser.add_argument("--target_tau", default=5e-3, type=float, help="Target network update weight.")
 parser.add_argument("--default_alpha", default=0.2, type=float, help="Default alpha.")
-parser.add_argument("--autotune_alpha", default=False, action="store_true", help="Autotune alpha.")
+parser.add_argument("--autotune_alpha", default=True, action="store_true", help="Autotune alpha.")
 
 USE_WANDB = True
 
@@ -136,17 +136,6 @@ class Network:
         # Instantiate the actor as `self._actor`.
         self._actor = Actor(args.hidden_layer_size).apply(wrappers.torch_init_with_xavier_and_zeros).to(self.device)
 
-        # TODO: Create a critic, which
-        # - takes observations and actions as inputs,
-        # - concatenates them,
-        # - passes the result through two dense layers with `args.hidden_layer_size` units
-        #   and ReLU activation,
-        # - finally, using a last dense layer produces a single output with no activation
-        # This critic needs to be cloned (for example using `copy.deepcopy`) so that
-        # two critics and two target critics are created. Note that the critics should be
-        # different with respect to each other, but the target critics should be the same
-        # as their corresponding original critics.
-
         class Critic(torch.nn.Module):
             def __init__(self, hidden_layer_size: int):
                 super().__init__()
@@ -172,8 +161,6 @@ class Network:
         self.target_critic1 = copy.deepcopy(self.critic1)
         self.target_critic2 = copy.deepcopy(self.critic2)
 
-        # TODO: Define an optimizer. Using `torch.optim.Adam` optimizer with
-        # the given `args.learning_rate` is a good default.
         self._optimizer = torch.optim.Adam(list(self._actor.parameters()) + list(self.critic1.parameters()) + list(self.critic2.parameters()), lr=args.learning_rate)
 
         # Create MSE loss.
@@ -194,23 +181,30 @@ class Network:
     def load_actor(self, path: str):
         self._actor.load_state_dict(torch.load(path, map_location=self.device))
 
+    def save_all(self, path: str):
+        self.save_actor("actor_"+path)
+        torch.save({
+            'actor': self._actor.state_dict(),
+            'critic1': self.critic1.state_dict(),
+            'critic2': self.critic2.state_dict(),
+            'target_critic1': self.target_critic1.state_dict(),
+            'target_critic2': self.target_critic2.state_dict(),
+            'optimizer': self._optimizer.state_dict()
+        }, path)
+
+    def load_all(self, path: str):
+        checkpoint = torch.load(path, map_location=self.device)
+        self._actor.load_state_dict(checkpoint['actor'])
+        self.critic1.load_state_dict(checkpoint['critic1'])
+        self.critic2.load_state_dict(checkpoint['critic2'])
+        self.target_critic1.load_state_dict(checkpoint['target_critic1'])
+        self.target_critic2.load_state_dict(checkpoint['target_critic2'])
+        self._optimizer.load_state_dict(checkpoint['optimizer'])
+
     # The `wrappers.typed_torch_function` automatically converts input arguments
     # to PyTorch tensors of given type, and converts the result to a NumPy array.
     @wrappers.typed_torch_function(device, torch.float32, torch.float32, torch.float32)
     def train(self, states: torch.Tensor, actions: torch.Tensor, returns: torch.Tensor) -> None:
-        # TODO: Separately train:
-        # - the actor, by using two objectives:
-        #   - the objective for the actor itself; in this objective, `alpha.detach()`
-        #     should be used (for the `alpha` returned by the actor) to avoid optimizing `alpha`,
-        #   - the objective for `alpha`, where `log_prob.detach()` should be used
-        #     to avoid computing gradient for other variables than `alpha`.
-        #     Use `args.target_entropy` as the target entropy (the default of -1 per action
-        #     component is fine and does not need to be tuned for the agent to train).
-        # - the critics using MSE loss.
-        #
-        # Finally, update the two target critic networks exponential moving
-        # average with weight `args.target_tau`, using `self.update_parameters_by_ema`.
-
         self._optimizer.zero_grad()
 
         actor_actions, log_prob, alpha = self._actor(states, sample=True)
@@ -254,10 +248,6 @@ class Network:
 
     @wrappers.typed_torch_function(device, torch.float32)
     def predict_values(self, states: torch.Tensor) -> np.ndarray:
-        # TODO: Produce the predicted returns, which are the minimum of
-        #    target_critic(s, a) - alpha * log_prob
-        #  considering both target critics and actions sampled from the actor.
-
         with torch.no_grad():
             actions, log_prob, alpha = self._actor(states, sample=True)
             critic1_values = self.target_critic1(states, actions)
@@ -280,7 +270,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     def evaluate_episode(start_evaluation: bool = False, logging: bool = True) -> float:
         rewards, state, done = 0, env.reset(start_evaluation=start_evaluation, logging=logging)[0], False
         while not done:
-            # TODO: Predict the action using the greedy policy.
             action = network.predict_mean_actions(np.array([state]))[0]
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
@@ -289,7 +278,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     # Evaluation in ReCodEx
     if args.recodex:
-        random_value = 447431
+        random_value = 649526
         network.load_actor(f"{args.env}_{random_value}")
         while True:
             evaluate_episode(True)
@@ -305,13 +294,16 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     training, autoreset = True, np.zeros(args.envs, dtype=bool)
     steps = 0
     if USE_WANDB:
-        wandb.log({"steps": steps})
+        wandb.log({"step": steps})
 
     random_value = random.randint(0, 1000000)
-    wandb.log({"random_value": random_value})
-    env_thresholds = {"Pendulum-v1": -180, "InvertedDoublePendulum-v5" : 9200, "BipedalWalker-v3": 210, "BipedalWalkerHardcore-v3": 110}
 
-    best = 0
+    random_value = 910625
+    network.load_all(f"{args.env}_{random_value}")
+    wandb.log({"random_value": random_value})
+    env_thresholds = {"Pendulum-v1": -180, "InvertedDoublePendulum-v5" : 9200, "BipedalWalker-v3": 210, "BipedalWalkerHardcore-v3": 110, "HalfCheetah-v5": 8200}
+
+    best = 4800
     while training:
         for _ in range(args.evaluate_each):
             # Predict actions by calling `network.predict_sampled_actions`.
@@ -331,7 +323,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 # Randomly uniformly sample transitions from the replay buffer.
                 batch = replay_buffer.sample(args.batch_size, np.random)
                 states, actions, rewards, dones, next_states = map(np.array, zip(*batch))
-                # TODO: Perform the training
 
                 values = network.predict_values(next_states)
                 average_value = np.mean(values)
@@ -356,7 +347,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             print(f"Best so far: {best}")
             if USE_WANDB:
                 wandb.log({"best": best})
-            network.save_actor(f"{args.env}_{random_value}")
+            network.save_all(f"{args.env}_{random_value}")
 
     # Final evaluation
     while True:
