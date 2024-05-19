@@ -64,9 +64,9 @@ public:
         else {
             Policy policy;
             pid_t pid = get_thread_id();
-            std::cerr<<"calling evaluator "<<pid<<std::endl;
+            //std::cerr<<"calling evaluator "<<pid<<std::endl;
             evaluator(this->game, policy, value);
-            std::cerr<<"evaluator finished "<<pid<<std::endl;
+           // std::cerr<<"evaluator finished "<<pid<<std::endl;
             float policySum = 0.0;
             for (int i = 0; i < AZQuiz::ACTIONS; i++) {
                 if (this->game.valid(i)) {
