@@ -58,7 +58,7 @@ class Network(torch.nn.Module):
         self.conv5 = torch.nn.Conv2d(15, 20, kernel_size=3, padding=1)
 
         self.policy_conv = torch.nn.Conv2d(20, 2, kernel_size=3, padding=1)
-        self.policy_dense = torch.nn.Linear(2 * 7 * 7, 28)
+        self.policy_dense = torch.nn.Linear(2 * 7 * 7, 225)
 
         self.value_conv = torch.nn.Conv2d(20, 2, kernel_size=3, padding=1)
         self.value_dense = torch.nn.Linear(2 * 7 * 7, 1)
@@ -235,7 +235,7 @@ class Player:
         else:
             # TODO: Otherwise run the `mcts` without exploration and
             # utilize the policy returned by it.
-            policy = np.zeros(NUM_ACTIONS)
+            policy = np.zeros(225)
             policy = pisqorky_cpp.mcts(game, self.agent, self.args.num_simulations, self.args.epsilon, self.args.alpha, policy)
 
         # Now select a valid action with the largest probability.
