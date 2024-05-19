@@ -54,11 +54,6 @@ void worker_evaluator(const AZQuiz& game, Policy& policy, float& value) {
 void worker_thread(bool randomized, int num_simulations, int sampling_moves, float epsilon, float alpha) try {
   while (true) {
     auto history = std::make_unique<History>();
-    // TODO: Simulate one game, collecting all (AZQuiz, Policy, float) triples
-    // to `history`, where
-    // - the `Policy` is the policy computed by `mcts`;
-    // - the float value is the outcome of the whole game.
-    // When calling `mcts`, use `worker_evaluator` as the evaluator.
 
     AZQuiz game(randomized);
     int currentMove = 0;
