@@ -56,7 +56,7 @@ public:
         if (isEvaluated())
             throw std::runtime_error("Cannot evaluate a node more than once");
 
-        this->game = std::move(game);
+        this->game = game;
 
         float value = 0;
         if (this->game.winner >= 0)
