@@ -30,7 +30,7 @@ parser.add_argument("--model_path", default="az_quiz.pt", type=str, help="Model 
 parser.add_argument("--num_simulations", default=100, type=int, help="Number of simulations in one MCTS.")
 parser.add_argument("--sampling_moves", default=10, type=int, help="Sampling moves.")
 parser.add_argument("--show_sim_games", default=False, action="store_true", help="Show simulated games.")
-parser.add_argument("--sim_games", default=32, type=int, help="Simulated games to generate in every iteration.")
+parser.add_argument("--sim_games", default=5, type=int, help="Simulated games to generate in every iteration.")
 parser.add_argument("--train_for", default=1, type=int, help="Update steps in every iteration.")
 parser.add_argument("--window_length", default=100_000, type=int, help="Replay buffer max length.")
 
@@ -296,11 +296,13 @@ def train(args: argparse.Namespace) -> Agent:
     while training:
         iteration += 1
 
-        az_quiz_cpp.simulated_games_start(args.sim_games, False, args.num_simulations, args.sampling_moves, args.epsilon, args.alpha)
         # Generate simulated games
         for _ in range(args.sim_games):
+            az_quiz_cpp.simulated_games_start(args.sim_games, False, args.num_simulations, args.sampling_moves,
+                                              args.epsilon, args.alpha)
             game = az_quiz_cpp.simulated_game(agent)
-            replay_buffer.extend(game)
+            az_quiz_cpp.simulated_games_stop()
+           # replay_buffer.extend(game)
 
             # If required, show the generated game, as 8 very long lines showing
             # all encountered boards, each field showing as
@@ -323,10 +325,11 @@ def train(args: argparse.Namespace) -> Agent:
                         log[1 + row].append("  " * (6 - row))
                 print(*["".join(line) for line in log], sep="\n")
 
-        az_quiz_cpp.simulated_games_stop()
         print("Training...")
         # Train
         for _ in range(args.train_for):
+            time.sleep(0.5)
+            continue
             # TODO: Perform training by sampling an `args.batch_size` of positions
             # from the `replay_buffer` and running `agent.train` on them.
             sample = replay_buffer.sample(args.batch_size) # sample is a list of tuples (board, policy, outcome)
@@ -402,6 +405,16 @@ def main(args: argparse.Namespace) -> Player:
 
 if __name__ == "__main__":
     args = parser.parse_args([] if "__file__" not in globals() else None)
+    agent = Agent(args)
+
+    for i in range(2):
+        for _ in range(2):
+            az_quiz_cpp.simulated_games_start(5, False, 100, 10,
+                                              0.25, 0.1)
+            az_quiz_cpp.simulated_game(agent)
+            az_quiz_cpp.simulated_games_stop()
+        time.sleep(0.5)
+    exit(0)
 
     player = main(args)
 
