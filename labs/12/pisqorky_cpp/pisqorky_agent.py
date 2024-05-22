@@ -34,6 +34,89 @@ parser.add_argument("--sim_games", default=32, type=int, help="Simulated games t
 parser.add_argument("--train_for", default=1, type=int, help="Update steps in every iteration.")
 parser.add_argument("--window_length", default=100_000, type=int, help="Replay buffer max length.")
 
+class SmallBlock(torch.nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(SmallBlock, self).__init__()
+        self.model = torch.nn.Sequential(
+            torch.nn.Conv2d(in_channels, out_channels, 3, stride=1, padding=1),
+            torch.nn.BatchNorm2d(out_channels)
+        )
+    def forward(self, X):
+        return self.model(X)
+
+class ResnetBlock(torch.nn.Module):
+    def __init__(self, in_channels, mid_channels):
+        super(ResnetBlock, self).__init__()
+        self.model = torch.nn.Sequential(
+            SmallBlock(in_channels, mid_channels),
+            torch.nn.ReLU(),
+            SmallBlock(mid_channels, in_channels)
+        )
+    def forward(self, X):
+        Y = self.model(X)
+        Y = Y + X
+        Y = torch.nn.ReLU()(Y)
+        return Y
+
+class DropoutBlock(torch.nn.Module):
+    def __init__(self, in_units, out_units):
+        super(DropoutBlock, self).__init__()
+        self.model = torch.nn.Sequential(
+            torch.nn.Linear(in_units, out_units),
+            torch.nn.BatchNorm1d(out_units),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(p=0.1)
+        )
+    def forward(self, X):
+        return self.model(X)
+
+class CRNet(torch.nn.Module):
+    def __init__(self, H=[200,100], num_channels = 32):
+
+        # input shape: batch_size x 7 x args.M x args.N
+
+        super(CRNet, self).__init__()
+        self.epoch = None
+
+        self.initial_block = torch.nn.Sequential(
+            torch.nn.Conv2d(3, num_channels, 3, stride=1, padding=1),
+            torch.nn.BatchNorm2d(num_channels),
+            torch.nn.ReLU()
+        )
+        self.middle_blocks = torch.nn.Sequential(
+            *[ResnetBlock(num_channels,num_channels) for _ in range(5)]
+        )
+        self.dropout_blocks = torch.nn.Sequential(
+            DropoutBlock(num_channels * 225, H[0]),
+            DropoutBlock(H[0], H[1])
+        )
+
+        self.model = torch.nn.Sequential(
+            self.initial_block,
+            self.middle_blocks,
+            torch.nn.Flatten(start_dim=1),
+            self.dropout_blocks
+        )
+
+        self.value_head = torch.nn.Sequential(
+            torch.nn.Linear(H[1], H[1]),
+            torch.nn.ReLU(),
+            torch.nn.Linear(H[1], 1),
+            torch.nn.Tanh()
+        )
+
+        self.my_policy_head = torch.nn.Sequential(
+            torch.nn.Linear(H[1], H[1]),
+            torch.nn.ReLU(),
+            torch.nn.Linear(H[1], 225),
+            torch.nn.Softmax(dim=-1)
+        )
+
+    def forward(self, X):
+        Y = self.model(X)
+        v = self.value_head(Y)
+        my_p = self.my_policy_head(Y)
+        return my_p, v.squeeze()
 
 #########
 # Agent #
@@ -51,17 +134,17 @@ class Network(torch.nn.Module):
         #   `tanh` activation.
         super().__init__()
 
-        self.conv1 = torch.nn.Conv2d(4, 15, kernel_size=3, padding=1)
+        self.conv1 = torch.nn.Conv2d(3, 15, kernel_size=3, padding=1)
         self.conv2 = torch.nn.Conv2d(15, 15, kernel_size=3, padding=1)
         self.conv3 = torch.nn.Conv2d(15, 15, kernel_size=3, padding=1)
         self.conv4 = torch.nn.Conv2d(15, 15, kernel_size=3, padding=1)
         self.conv5 = torch.nn.Conv2d(15, 20, kernel_size=3, padding=1)
 
         self.policy_conv = torch.nn.Conv2d(20, 2, kernel_size=3, padding=1)
-        self.policy_dense = torch.nn.Linear(2 * 7 * 7, 225)
+        self.policy_dense = torch.nn.Linear(450, 225)
 
         self.value_conv = torch.nn.Conv2d(20, 2, kernel_size=3, padding=1)
-        self.value_dense = torch.nn.Linear(2 * 7 * 7, 1)
+        self.value_dense = torch.nn.Linear(450, 1)
 
     def forward(self, x):
         x = torch.nn.functional.relu(self.conv1(x))
@@ -78,7 +161,7 @@ class Network(torch.nn.Module):
         value = torch.flatten(value, 1)
         value = torch.tanh(self.value_dense(value))
 
-        return policy, value
+        return policy, value.squeeze()
 
 
 class Agent:
@@ -86,7 +169,7 @@ class Agent:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def __init__(self, args: argparse.Namespace):
-        self._model = Network().to(self.device)
+        self._model = CRNet().to(self.device)
         self._optimizer = torch.optim.Adam(self._model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
 
     @classmethod
@@ -119,7 +202,7 @@ class Agent:
         with torch.no_grad():
             return self._model(boards)
 
-    def board(self, game: AZQuiz) -> np.ndarray:
+    def board(self, game: Pisqorky) -> np.ndarray:
         # TODO: Generate the boards from the current `AZQuiz` game.
         #
         # The `game.board` returns a board representation, but you also need to
@@ -158,11 +241,11 @@ def train(args: argparse.Namespace) -> Agent:
     while training:
         iteration += 1
 
-        pisqorky_cpp.simulated_games_start(args.sim_games, False, args.num_simulations, args.sampling_moves, args.epsilon, args.alpha)
+        pisqorky_cpp.simulated_games_start(args.sim_games, args.num_simulations, args.sampling_moves, args.epsilon, args.alpha)
         # Generate simulated games
+        game = pisqorky_cpp.simulated_game(agent)
+        replay_buffer.extend(game)
         for _ in range(args.sim_games):
-            game = pisqorky_cpp.simulated_game(agent)
-            replay_buffer.extend(game)
 
             # If required, show the generated game, as 8 very long lines showing
             # all encountered boards, each field showing as
@@ -186,9 +269,11 @@ def train(args: argparse.Namespace) -> Agent:
                 print(*["".join(line) for line in log], sep="\n")
 
         pisqorky_cpp.simulated_games_stop()
-        print("Training...")
         # Train
         for _ in range(args.train_for):
+            if len(replay_buffer) < args.batch_size:
+                continue
+            print("Training...")
             # TODO: Perform training by sampling an `args.batch_size` of positions
             # from the `replay_buffer` and running `agent.train` on them.
             sample = replay_buffer.sample(args.batch_size) # sample is a list of tuples (board, policy, outcome)
@@ -208,8 +293,8 @@ def train(args: argparse.Namespace) -> Agent:
             # but you can of course change it so that it does.
             score = pisqorky_evaluator.evaluate(
                 [Player(agent, argparse.Namespace(num_simulations=0)),
-                 pisqorky_player_heuristic.Player(seed=args.seed)],
-                games=28*10, randomized=False, first_chosen=True, render=False, verbose=False)
+                 pisqorky_player_heuristic.Player()],
+                games=28*10, render=False, verbose=False)
             if score > best_score:
                 agent.save(args.model_path)
                 best_score = score

@@ -59,13 +59,14 @@ void worker_thread(int num_simulations, int sampling_moves, float epsilon, float
     // - the float value is the outcome of the whole game.
     // When calling `mcts`, use `worker_evaluator` as the evaluator.
 
-    Pisqorky game(randomized);
+    Pisqorky game{};
     int currentMove = 0;
 
     std::vector<Pisqorky> boards;
     std::vector<Policy> policies;
     std::vector<float> outcomes;
 
+    heuristicID = rand() % 2;
     while(game.winner < 0){
         Policy policy;
         mcts(game, worker_evaluator, num_simulations, epsilon, alpha, policy);

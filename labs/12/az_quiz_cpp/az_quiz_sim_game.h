@@ -83,6 +83,7 @@ void worker_thread(bool randomized, int num_simulations, int sampling_moves, flo
         }
 
         game.move(action);
+        currentMove++;
     }
 
     float perspectiveGameOutcome = 1;

@@ -9,14 +9,10 @@ typedef std::array<float, Pisqorky::ACTIONS> Policy;
 
 typedef std::function<void(const Pisqorky&, Policy&, float&)> Evaluator;
 
-pid_t get_thread_id() {
-    return syscall(SYS_gettid);
-}
-
 class MCTNode {
 public:
-    std::array<std::unique_ptr<MCTNode>, AZQuiz::ACTIONS> children;
-    AZQuiz game;
+    std::array<std::unique_ptr<MCTNode>, Pisqorky::ACTIONS> children;
+    Pisqorky game;
     float totalValue=0.0f;
     float prior=0.0f;
     int visitCount=0;
@@ -33,28 +29,25 @@ public:
         return visitCount > 0;
     }
 
-    void evaluate(AZQuiz game, const Evaluator& evaluator) {
+    void evaluate(Pisqorky game, const Evaluator& evaluator) {
         if (isEvaluated())
             throw std::runtime_error("Cannot evaluate a node more than once");
 
-        this->game = std::move(game);
+        this->game = game;
 
         float value = 0;
         if (this->game.winner >= 0)
             value = (game.winner==2? 0 : -1);
         else {
             Policy policy;
-            pid_t pid = get_thread_id();
-            std::cerr<<"calling evaluator "<<pid<<std::endl;
             evaluator(this->game, policy, value);
-            std::cerr<<"evaluator finished "<<pid<<std::endl;
             float policySum = 0.0;
-            for (int i = 0; i < AZQuiz::ACTIONS; i++) {
+            for (int i = 0; i < Pisqorky::ACTIONS; i++) {
                 if (this->game.valid(i)) {
                     policySum += policy[i];
                 }
             }
-            for (int i = 0; i < AZQuiz::ACTIONS; i++) {
+            for (int i = 0; i < Pisqorky::ACTIONS; i++) {
                 if (this->game.valid(i)) {
                     validChildrenCount++;
                     children[i] = std::make_unique<MCTNode>(policy[i] / policySum);
@@ -101,7 +94,7 @@ public:
         float bestValue = -std::numeric_limits<float>::infinity();
         std::pair<int, MCTNode*> bestChild = {-1, nullptr};
 
-        for (int i = 0; i < AZQuiz::ACTIONS; i++) {
+        for (int i = 0; i < Pisqorky::ACTIONS; i++) {
             if (children[i]) {
                 float C = 1.25f;
                 float UCBScore = -children[i]->value() + C * children[i]->prior * sqrt(static_cast<float>(visitCount)) / (1.0f + children[i]->visitCount);
@@ -136,7 +129,7 @@ void mcts(const Pisqorky& game, const Evaluator& evaluator, int num_simulations,
         }
 
         if (!node->isEvaluated()) {
-            AZQuiz nextGame = path.back()->game;
+            Pisqorky nextGame = path.back()->game;
             nextGame.move(action);
             node->evaluate(nextGame, evaluator);
         } else {
@@ -159,7 +152,7 @@ void mcts(const Pisqorky& game, const Evaluator& evaluator, int num_simulations,
             totalVisits += child->visitCount;
         }
     }
-    for (int i = 0; i < AZQuiz::ACTIONS; i++) {
+    for (int i = 0; i < Pisqorky::ACTIONS; i++) {
         if (root.children[i]) {
             policy[i] = static_cast<float>(root.children[i]->visitCount) / totalVisits;
         }
