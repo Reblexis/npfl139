@@ -293,10 +293,11 @@ def train(args: argparse.Namespace) -> Agent:
     iteration = 0
     training = True
     best_score = 0
+    az_quiz_cpp.simulated_games_start(args.sim_games, False, args.num_simulations, args.sampling_moves, args.epsilon,
+                                      args.alpha)
     while training:
         iteration += 1
 
-        az_quiz_cpp.simulated_games_start(args.sim_games, False, args.num_simulations, args.sampling_moves, args.epsilon, args.alpha)
         # Generate simulated games
         for _ in range(args.sim_games):
             game = az_quiz_cpp.simulated_game(agent)
@@ -323,7 +324,6 @@ def train(args: argparse.Namespace) -> Agent:
                         log[1 + row].append("  " * (6 - row))
                 print(*["".join(line) for line in log], sep="\n")
 
-        az_quiz_cpp.simulated_games_stop()
         print("Training...")
         # Train
         for _ in range(args.train_for):
@@ -353,6 +353,7 @@ def train(args: argparse.Namespace) -> Agent:
                 best_score = score
             print("Evaluation after iteration {}: {:.1f}%".format(iteration, 100 * score), flush=True)
 
+    az_quiz_cpp.simulated_games_stop()
     return agent
 
 

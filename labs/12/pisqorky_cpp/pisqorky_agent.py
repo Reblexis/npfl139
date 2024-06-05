@@ -238,10 +238,11 @@ def train(args: argparse.Namespace) -> Agent:
     iteration = 0
     training = True
     best_score = 0
+    pisqorky_cpp.simulated_games_start(args.sim_games, args.num_simulations, args.sampling_moves, args.epsilon,
+                                       args.alpha)
     while training:
         iteration += 1
 
-        pisqorky_cpp.simulated_games_start(args.sim_games, args.num_simulations, args.sampling_moves, args.epsilon, args.alpha)
         # Generate simulated games
         game = pisqorky_cpp.simulated_game(agent)
         replay_buffer.extend(game)
@@ -268,7 +269,6 @@ def train(args: argparse.Namespace) -> Agent:
                         log[1 + row].append("  " * (6 - row))
                 print(*["".join(line) for line in log], sep="\n")
 
-        pisqorky_cpp.simulated_games_stop()
         # Train
         for _ in range(args.train_for):
             if len(replay_buffer) < args.batch_size:
@@ -300,6 +300,7 @@ def train(args: argparse.Namespace) -> Agent:
                 best_score = score
             print("Evaluation after iteration {}: {:.1f}%".format(iteration, 100 * score), flush=True)
 
+    pisqorky_cpp.simulated_games_stop()
     return agent
 
 
